@@ -88,8 +88,10 @@ var (
 	frostCol    = color.RGBA{120, 200, 255, 255}
 	physicalCol = color.RGBA{230, 230, 230, 255}
 	minionCol   = color.RGBA{120, 220, 160, 255}
-	wallCol     = color.RGBA{170, 160, 140, 255}
-	slowCol     = color.RGBA{240, 200, 90, 255}
+	wallCol        = color.RGBA{170, 160, 140, 255}
+	slowCol        = color.RGBA{240, 200, 90, 255}
+	rangeRingCol   = color.RGBA{180, 130, 220, 110}
+	rangeTargetCol = color.RGBA{255, 200, 130, 220}
 )
 
 func damageTypeColor(t runes.DamageType) color.RGBA {
@@ -125,6 +127,7 @@ func DrawRun(screen *ebiten.Image, v RunView) {
 func drawCombatScreen(screen *ebiten.Image, v RunView) {
 	c := v.Combat
 	drawRadar(screen, c)
+	drawRangePreview(screen, c)
 	drawPopups(screen, c)
 	drawPlacementPreview(screen, c)
 	drawStage(screen, c)
@@ -133,6 +136,96 @@ func drawCombatScreen(screen *ebiten.Image, v RunView) {
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
+}
+
+// drawRangePreview draws the range circle and likely target for the card the
+// cursor is hovering in the player's hand. Cards with no Range or that aren't
+// playable show nothing.
+func drawRangePreview(screen *ebiten.Image, c *combat.Combat) {
+	if c.PendingCardIdx >= 0 {
+		return
+	}
+	mx, my := ebiten.CursorPosition()
+	i := HitCard(c, mx, my)
+	if i < 0 {
+		return
+	}
+	card := c.Hand[i]
+	if card.Range <= 0 {
+		return
+	}
+	vector.StrokeCircle(screen, RadarCX, RadarCY, float32(card.Range), 1, rangeRingCol, true)
+
+	// Highlight the enemy that would be hit (nearest in range with LOS).
+	if target := nearestInRangeForPreview(c, card.Range); target != nil {
+		ex := float32(RadarCX + (target.X - c.Player.X))
+		ey := float32(RadarCY + (target.Y - c.Player.Y))
+		vector.StrokeCircle(screen, ex, ey, 14, 2, rangeTargetCol, true)
+	}
+}
+
+// nearestInRangeForPreview is a UI-only helper that mirrors the targeting
+// rules in combat (nearest enemy within range with line-of-sight from player).
+// We intentionally walk c.Enemies directly rather than expose more API.
+func nearestInRangeForPreview(c *combat.Combat, r float64) *combatEnemyView {
+	var bestX, bestY float64
+	bestD := math.Inf(1)
+	found := false
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
+		if d > r {
+			continue
+		}
+		blocked := false
+		for _, w := range c.Walls {
+			if w.HP <= 0 {
+				continue
+			}
+			if hit, _, _, _ := segIntersectFor(c.Player.X, c.Player.Y, e.X, e.Y, w.X1, w.Y1, w.X2, w.Y2); hit {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+		if d < bestD {
+			bestD = d
+			bestX = e.X
+			bestY = e.Y
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &combatEnemyView{X: bestX, Y: bestY}
+}
+
+type combatEnemyView struct {
+	X, Y float64
+}
+
+// segIntersectFor is a tiny duplicate of combat's segment intersection used
+// for UI LOS checks. Avoids exposing more package internals just for hover.
+func segIntersectFor(ax, ay, bx, by, cx, cy, dx, dy float64) (bool, float64, float64, float64) {
+	rX := bx - ax
+	rY := by - ay
+	sX := dx - cx
+	sY := dy - cy
+	denom := rX*sY - rY*sX
+	if denom == 0 {
+		return false, 0, 0, 0
+	}
+	t := ((cx-ax)*sY - (cy-ay)*sX) / denom
+	u := ((cx-ax)*rY - (cy-ay)*rX) / denom
+	if t < 0 || t > 1 || u < 0 || u > 1 {
+		return false, 0, 0, 0
+	}
+	return true, t, ax + t*rX, ay + t*rY
 }
 
 func drawStage(screen *ebiten.Image, c *combat.Combat) {

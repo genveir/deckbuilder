@@ -528,12 +528,19 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	}
 
 	if e.RangedPower > 0 {
-		apply(e.RangedPower, e.RangedType)
-		e.Intent = "cast"
+		inRange := e.MaxRange == 0 || dist <= e.MaxRange
+		canCast := inRange && c.hasLOS(e.X, e.Y, t.x, t.y)
+		if canCast {
+			apply(e.RangedPower, e.RangedType)
+			e.Intent = "cast"
+		} else {
+			e.Intent = "advance"
+		}
+		// Drift forward (path-aware) until in melee range.
 		if dist > e.MeleeRange {
-			step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
-			if step > 0 {
-				moveTowardPoint(t.x, t.y, step)
+			if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
+				nx, ny := c.smoothPathStep(e.X, e.Y, path, e.MoveSpeed)
+				moveTowardPoint(nx, ny, e.MoveSpeed)
 			}
 		}
 		return
@@ -635,7 +642,13 @@ func (c *Combat) refreshIntents() {
 			suffix = " minion"
 		}
 		if e.RangedPower > 0 {
-			e.Intent = fmt.Sprintf("cast %s%s (%d)", e.RangedType, suffix, e.RangedPower)
+			inRange := e.MaxRange == 0 || dist <= e.MaxRange
+			canCast := inRange && c.hasLOS(e.X, e.Y, t.x, t.y)
+			if canCast {
+				e.Intent = fmt.Sprintf("cast %s%s (%d)", e.RangedType, suffix, e.RangedPower)
+			} else {
+				e.Intent = "advance"
+			}
 			continue
 		}
 		if dist <= e.MeleeRange && c.hasLOS(e.X, e.Y, t.x, t.y) {
@@ -700,7 +713,10 @@ func (c *Combat) checkVictory() {
 
 // --- runes.World implementation ---
 
-func (c *Combat) DamageNearest(amount int, dt runes.DamageType) {
+// nearestEnemyInRange returns the nearest living enemy that is within
+// maxRange of the player and has line-of-sight. maxRange of 0 means
+// unlimited.
+func (c *Combat) nearestEnemyInRange(maxRange float64) *enemies.Enemy {
 	var target *enemies.Enemy
 	best := math.Inf(1)
 	for _, e := range c.Enemies {
@@ -708,11 +724,26 @@ func (c *Combat) DamageNearest(amount int, dt runes.DamageType) {
 			continue
 		}
 		d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
+		if maxRange > 0 && d > maxRange {
+			continue
+		}
+		if !c.hasLOS(c.Player.X, c.Player.Y, e.X, e.Y) {
+			continue
+		}
 		if d < best {
 			best = d
 			target = e
 		}
 	}
+	return target
+}
+
+func (c *Combat) HasTargetInRange(maxRange float64) bool {
+	return c.nearestEnemyInRange(maxRange) != nil
+}
+
+func (c *Combat) DamageNearest(amount int, dt runes.DamageType, maxRange float64) {
+	target := c.nearestEnemyInRange(maxRange)
 	if target == nil {
 		return
 	}
@@ -743,9 +774,18 @@ func (c *Combat) advancePopups(dt float64) {
 	c.Popups = out
 }
 
-func (c *Combat) DamageAll(amount int, dt runes.DamageType) {
+func (c *Combat) DamageAll(amount int, dt runes.DamageType, maxRange float64) {
 	for _, e := range c.Enemies {
 		if e.HP <= 0 {
+			continue
+		}
+		if maxRange > 0 {
+			d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
+			if d > maxRange {
+				continue
+			}
+		}
+		if !c.hasLOS(c.Player.X, c.Player.Y, e.X, e.Y) {
 			continue
 		}
 		dealt := amount
@@ -787,8 +827,8 @@ func (c *Combat) NearestIntendsAttack() bool {
 	return math.Hypot(target.X-c.Player.X, target.Y-c.Player.Y) <= target.MeleeRange
 }
 
-func (c *Combat) DelayNearest(turns int) {
-	t := c.nearestLiving()
+func (c *Combat) DelayNearest(turns int, maxRange float64) {
+	t := c.nearestEnemyInRange(maxRange)
 	if t == nil {
 		return
 	}
@@ -828,8 +868,12 @@ func (c *Combat) SummonMinionAt(power, hp int, x, y float64) {
 	})
 }
 
-func (c *Combat) DrainNearest(amount int) {
-	c.DamageNearest(amount, runes.Physical)
+func (c *Combat) DrainNearest(amount int, maxRange float64) {
+	target := c.nearestEnemyInRange(maxRange)
+	if target == nil {
+		return
+	}
+	c.DamageNearest(amount, runes.Physical, maxRange)
 	c.HealPlayer(amount)
 }
 
@@ -840,7 +884,7 @@ func (c *Combat) HealPlayer(amount int) {
 	}
 }
 
-func (c *Combat) SacrificeNearestMinion(consumeHP, dmg int) {
+func (c *Combat) SacrificeNearestMinion(consumeHP, dmg int, maxRange float64) {
 	var nearest *Minion
 	best := math.Inf(1)
 	for _, m := range c.Minions {
@@ -860,7 +904,7 @@ func (c *Combat) SacrificeNearestMinion(consumeHP, dmg int) {
 	if nearest.HP < 0 {
 		nearest.HP = 0
 	}
-	c.DamageNearest(dmg, runes.Physical)
+	c.DamageNearest(dmg, runes.Physical, maxRange)
 }
 
 func (c *Combat) HasMinion() bool {
@@ -931,6 +975,7 @@ func (c *Combat) buildIntentRune(e *enemies.Enemy) (runes.Card, bool) {
 	}
 	t := c.chooseTarget(e)
 	dist := math.Hypot(e.X-t.x, e.Y-t.y)
+	const mimicRange = 200.0
 	if e.RangedPower > 0 {
 		power := e.RangedPower
 		dt := e.RangedType
@@ -938,8 +983,9 @@ func (c *Combat) buildIntentRune(e *enemies.Enemy) (runes.Card, bool) {
 			Name:        fmt.Sprintf("Mimic: %s Cast", e.RangedType),
 			Glyph:       "↻",
 			Cost:        1,
-			Description: fmt.Sprintf("Deal %d %s damage to the nearest enemy.", power, dt),
-			Effect:      func(w runes.World) { w.DamageNearest(power, dt) },
+			Range:       mimicRange,
+			Description: fmt.Sprintf("Deal %d %s damage to the nearest enemy in range.", power, dt),
+			Effect:      func(w runes.World) { w.DamageNearest(power, dt, mimicRange) },
 		}, true
 	}
 	if dist <= e.MeleeRange {
@@ -948,15 +994,16 @@ func (c *Combat) buildIntentRune(e *enemies.Enemy) (runes.Card, bool) {
 			Name:        "Mimic: Strike",
 			Glyph:       "↻",
 			Cost:        1,
-			Description: fmt.Sprintf("Deal %d damage to the nearest enemy.", power),
-			Effect:      func(w runes.World) { w.DamageNearest(power, runes.Physical) },
+			Range:       mimicRange,
+			Description: fmt.Sprintf("Deal %d damage to the nearest enemy in range.", power),
+			Effect:      func(w runes.World) { w.DamageNearest(power, runes.Physical, mimicRange) },
 		}, true
 	}
 	return runes.Card{}, false
 }
 
-func (c *Combat) NearestHasIntentRune() bool {
-	target := c.nearestNonStunned()
+func (c *Combat) NearestHasIntentRune(maxRange float64) bool {
+	target := c.nearestNonStunnedInRange(maxRange)
 	if target == nil {
 		return false
 	}
@@ -964,8 +1011,8 @@ func (c *Combat) NearestHasIntentRune() bool {
 	return ok
 }
 
-func (c *Combat) CopyNearestIntent() {
-	target := c.nearestNonStunned()
+func (c *Combat) CopyNearestIntent(maxRange float64) {
+	target := c.nearestNonStunnedInRange(maxRange)
 	if target == nil {
 		return
 	}
@@ -974,6 +1021,28 @@ func (c *Combat) CopyNearestIntent() {
 		return
 	}
 	c.Hand = append(c.Hand, card)
+}
+
+func (c *Combat) nearestNonStunnedInRange(maxRange float64) *enemies.Enemy {
+	var target *enemies.Enemy
+	best := math.Inf(1)
+	for _, e := range c.Enemies {
+		if e.HP <= 0 || e.Stunned > 0 {
+			continue
+		}
+		d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
+		if maxRange > 0 && d > maxRange {
+			continue
+		}
+		if !c.hasLOS(c.Player.X, c.Player.Y, e.X, e.Y) {
+			continue
+		}
+		if d < best {
+			best = d
+			target = e
+		}
+	}
+	return target
 }
 
 func (c *Combat) nearestNonStunned() *enemies.Enemy {

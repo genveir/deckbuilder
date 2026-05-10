@@ -46,26 +46,45 @@ func (c Class) String() string {
 // implements World; runes only depend on this small interface to avoid an
 // import cycle.
 type World interface {
-	DamageNearest(amount int, dt DamageType)
-	DamageAll(amount int, dt DamageType)
+	// Damage / debuff: maxRange of 0 means unlimited; LOS is always required.
+	DamageNearest(amount int, dt DamageType, maxRange float64)
+	DamageAll(amount int, dt DamageType, maxRange float64)
+	DelayNearest(turns int, maxRange float64)
+	DelayAll(turns int)
+	DrainNearest(amount int, maxRange float64)
+	SacrificeNearestMinion(consumeHP, dmg int, maxRange float64)
+	NearestHasIntentRune(maxRange float64) bool
+	CopyNearestIntent(maxRange float64)
+
+	// Targeting helper for CanPlay gating.
+	HasTargetInRange(maxRange float64) bool
+
 	GainArmor(amount int)
 	GrantMovement(extra float64)
 	HasMoved() bool
 	ConsumeAllMovement()
 	NearestIntendsAttack() bool
-	DelayNearest(turns int)
-	DelayAll(turns int)
+
 	SummonMinion(power, hp int)
 	SummonMinionAt(power, hp int, x, y float64)
-	DrainNearest(amount int)
-	SacrificeNearestMinion(consumeHP, dmg int)
 	HasMinion() bool
+
 	HealPlayer(amount int)
 	LoseHP(amount int)
 	AddEnergy(amount int)
-	NearestHasIntentRune() bool
-	CopyNearestIntent()
 	PlaceWall(cx, cy float64, length float64, hp int)
+}
+
+// requireTargetInRange is a CanPlay helper for cards that target the nearest
+// in-range enemy: blocks the play if no living enemy is reachable within the
+// given world-distance plus line-of-sight.
+func requireTargetInRange(r float64) func(World) (bool, string) {
+	return func(w World) (bool, string) {
+		if !w.HasTargetInRange(r) {
+			return false, "no target in range"
+		}
+		return true, ""
+	}
 }
 
 // PlacementShape tells the UI what kind of placement preview to draw and what
@@ -90,6 +109,9 @@ type Card struct {
 	PlacementEffect func(World, float64, float64)
 	// PlacementShape controls how the placement target is previewed.
 	PlacementShape PlacementShape
+	// Range is the offensive range for hover preview and CanPlay gating.
+	// 0 means "no range concept" (self-buff, summon, utility).
+	Range float64
 	// Slow runes make any spell containing them resolve AFTER the enemy turn.
 	// They tend to be powerful effects whose downside is conceding initiative.
 	Slow bool
@@ -99,14 +121,15 @@ type Card struct {
 }
 
 func FireAttack() Card {
+	const r = 200
 	return Card{
 		Name:        "Fire Attack",
 		Glyph:       "ᚾ",
 		Cost:        1,
-		Description: "Deal 6 fire damage to the nearest enemy.",
-		Effect: func(w World) {
-			w.DamageNearest(6, Fire)
-		},
+		Range:       r,
+		Description: "Deal 6 fire damage to the nearest enemy in range.",
+		Effect:      func(w World) { w.DamageNearest(6, Fire, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
@@ -130,14 +153,15 @@ func EarthArmor() Card {
 }
 
 func FrostAttack() Card {
+	const r = 200
 	return Card{
 		Name:        "Frost Attack",
 		Glyph:       "ᛁ",
 		Cost:        1,
-		Description: "Deal 5 frost damage to the nearest enemy.",
-		Effect: func(w World) {
-			w.DamageNearest(5, Frost)
-		},
+		Range:       r,
+		Description: "Deal 5 frost damage to the nearest enemy in range.",
+		Effect:      func(w World) { w.DamageNearest(5, Frost, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
@@ -156,24 +180,32 @@ func Move() Card {
 // --- Mesmer cards ---
 
 func AphyrDelay() Card {
+	const r = 250
 	return Card{
 		Name:        "Aphyr",
 		Glyph:       "ᚬ",
 		Cost:        1,
+		Range:       r,
 		Description: "Delay the nearest enemy's next action by 1 turn. Slow.",
 		Slow:        true,
-		Effect:      func(w World) { w.DelayNearest(1) },
+		Effect:      func(w World) { w.DelayNearest(1, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
 func IsaAggressive() Card {
+	const r = 200
 	return Card{
 		Name:        "Isa (aggressive)",
 		Glyph:       "ᛁ↯",
 		Cost:        1,
+		Range:       r,
 		Description: "Deal 8 damage. Castable only if the nearest enemy intends to attack.",
-		Effect:      func(w World) { w.DamageNearest(8, Physical) },
+		Effect:      func(w World) { w.DamageNearest(8, Physical, r) },
 		CanPlay: func(w World) (bool, string) {
+			if !w.HasTargetInRange(r) {
+				return false, "no target in range"
+			}
 			if !w.NearestIntendsAttack() {
 				return false, "nearest must intend to attack"
 			}
@@ -183,13 +215,18 @@ func IsaAggressive() Card {
 }
 
 func IsaPassive() Card {
+	const r = 200
 	return Card{
 		Name:        "Isa (passive)",
 		Glyph:       "ᛁ◦",
 		Cost:        1,
+		Range:       r,
 		Description: "Deal 8 damage. Castable only if the nearest enemy does NOT intend to attack.",
-		Effect:      func(w World) { w.DamageNearest(8, Physical) },
+		Effect:      func(w World) { w.DamageNearest(8, Physical, r) },
 		CanPlay: func(w World) (bool, string) {
+			if !w.HasTargetInRange(r) {
+				return false, "no target in range"
+			}
 			if w.NearestIntendsAttack() {
 				return false, "nearest must not intend to attack"
 			}
@@ -211,25 +248,33 @@ func Thurisaz() Card {
 }
 
 func Madr() Card {
+	const r = 150
 	return Card{
 		Name:        "Maðr",
 		Glyph:       "ᛘ",
 		Cost:        1,
-		Description: "Drain: deal 4 damage to the nearest enemy and heal 4.",
-		Effect:      func(w World) { w.DrainNearest(4) },
+		Range:       r,
+		Description: "Drain: deal 4 damage to the nearest enemy in range and heal 4.",
+		Effect:      func(w World) { w.DrainNearest(4, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
 func Ar() Card {
+	const r = 150
 	return Card{
 		Name:        "Ár",
 		Glyph:       "ᛅ",
 		Cost:        0,
-		Description: "Sacrifice 4 HP from your nearest minion to deal 4 damage to the nearest enemy.",
-		Effect:      func(w World) { w.SacrificeNearestMinion(4, 4) },
+		Range:       r,
+		Description: "Sacrifice 4 HP from your nearest minion to deal 4 damage to the nearest enemy in range.",
+		Effect:      func(w World) { w.SacrificeNearestMinion(4, 4, r) },
 		CanPlay: func(w World) (bool, string) {
 			if !w.HasMinion() {
 				return false, "requires a living minion"
+			}
+			if !w.HasTargetInRange(r) {
+				return false, "no target in range"
 			}
 			return true, ""
 		},
@@ -239,33 +284,42 @@ func Ar() Card {
 // --- Reward pool (cards offered between combats) ---
 
 func StrongFireAttack() Card {
+	const r = 200
 	return Card{
 		Name:        "Strong Fire Attack",
 		Glyph:       "ᚾ+",
 		Cost:        1,
-		Description: "Deal 9 fire damage to the nearest enemy.",
-		Effect:      func(w World) { w.DamageNearest(9, Fire) },
+		Range:       r,
+		Description: "Deal 9 fire damage to the nearest enemy in range.",
+		Effect:      func(w World) { w.DamageNearest(9, Fire, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
 func GreaterFireAttack() Card {
+	const r = 250
 	return Card{
 		Name:        "Greater Fire Attack",
 		Glyph:       "ᚾ++",
 		Cost:        2,
-		Description: "Deal 14 fire damage to the nearest enemy. Slow.",
+		Range:       r,
+		Description: "Deal 14 fire damage to the nearest enemy in range. Slow.",
 		Slow:        true,
-		Effect:      func(w World) { w.DamageNearest(14, Fire) },
+		Effect:      func(w World) { w.DamageNearest(14, Fire, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
 func Firestorm() Card {
+	const r = 250
 	return Card{
 		Name:        "Firestorm",
 		Glyph:       "ᚠ",
 		Cost:        2,
-		Description: "Deal 4 fire damage to all enemies.",
-		Effect:      func(w World) { w.DamageAll(4, Fire) },
+		Range:       r,
+		Description: "Deal 4 fire damage to every enemy in range with line-of-sight.",
+		Effect:      func(w World) { w.DamageAll(4, Fire, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
@@ -303,12 +357,15 @@ func Sprint() Card {
 }
 
 func GreaterAphyr() Card {
+	const r = 250
 	return Card{
 		Name:        "Greater Aphyr",
 		Glyph:       "ᚬ+",
 		Cost:        2,
+		Range:       r,
 		Description: "Delay the nearest enemy's next 2 actions.",
-		Effect:      func(w World) { w.DelayNearest(2) },
+		Effect:      func(w World) { w.DelayNearest(2, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 
@@ -323,13 +380,18 @@ func MassDelay() Card {
 }
 
 func SharpIsa() Card {
+	const r = 200
 	return Card{
 		Name:        "Sharp Isa",
 		Glyph:       "ᛁ↯+",
 		Cost:        1,
+		Range:       r,
 		Description: "Deal 13 damage. Castable only if the nearest enemy intends to attack.",
-		Effect:      func(w World) { w.DamageNearest(13, Physical) },
+		Effect:      func(w World) { w.DamageNearest(13, Physical, r) },
 		CanPlay: func(w World) (bool, string) {
+			if !w.HasTargetInRange(r) {
+				return false, "no target in range"
+			}
 			if !w.NearestIntendsAttack() {
 				return false, "nearest must intend to attack"
 			}
@@ -339,13 +401,18 @@ func SharpIsa() Card {
 }
 
 func ColdIsa() Card {
+	const r = 200
 	return Card{
 		Name:        "Cold Isa",
 		Glyph:       "ᛁ◦+",
 		Cost:        1,
+		Range:       r,
 		Description: "Deal 13 damage. Castable only if the nearest enemy does NOT intend to attack.",
-		Effect:      func(w World) { w.DamageNearest(13, Physical) },
+		Effect:      func(w World) { w.DamageNearest(13, Physical, r) },
 		CanPlay: func(w World) (bool, string) {
+			if !w.HasTargetInRange(r) {
+				return false, "no target in range"
+			}
 			if w.NearestIntendsAttack() {
 				return false, "nearest must not intend to attack"
 			}
@@ -378,14 +445,16 @@ func Reanimate() Card {
 }
 
 func Mimic() Card {
+	const r = 250
 	return Card{
 		Name:        "Mimic",
 		Glyph:       "↻",
 		Cost:        1,
+		Range:       r,
 		Description: "Copy the nearest enemy's intended rune into your hand.",
-		Effect:      func(w World) { w.CopyNearestIntent() },
+		Effect:      func(w World) { w.CopyNearestIntent(r) },
 		CanPlay: func(w World) (bool, string) {
-			if !w.NearestHasIntentRune() {
+			if !w.NearestHasIntentRune(r) {
 				return false, "nearest has no rune to copy"
 			}
 			return true, ""
@@ -394,12 +463,15 @@ func Mimic() Card {
 }
 
 func MassDrain() Card {
+	const r = 200
 	return Card{
 		Name:        "Mass Drain",
 		Glyph:       "ᛘ+",
 		Cost:        2,
-		Description: "Drain: deal 6 damage to the nearest enemy and heal 6.",
-		Effect:      func(w World) { w.DrainNearest(6) },
+		Range:       r,
+		Description: "Drain: deal 6 damage to the nearest enemy in range and heal 6.",
+		Effect:      func(w World) { w.DrainNearest(6, r) },
+		CanPlay:     requireTargetInRange(r),
 	}
 }
 

@@ -11,6 +11,7 @@ type Enemy struct {
 	AttackPower int
 	RangedPower int              // 0 = no ranged attack
 	RangedType  runes.DamageType // damage type of ranged attack (Physical default)
+	MaxRange    float64          // max distance for the ranged attack; 0 = unlimited
 	Stunned     int              // turns remaining where the enemy skips its action
 	Weakness    runes.DamageType // hidden from the player
 	Intent      string           // human-readable next action
@@ -38,6 +39,7 @@ func NewWraith(x, y float64) *Enemy {
 		AttackPower: 0,
 		RangedPower: 5,
 		RangedType:  runes.Frost,
+		MaxRange:    300,
 		Weakness:    runes.Fire,
 	}
 }
