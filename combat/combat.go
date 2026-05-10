@@ -59,6 +59,8 @@ type Combat struct {
 	hasMoved       bool
 	Phase          Phase
 
+	Turn int // player turns elapsed in this combat (1-based)
+
 	Popups []DamagePopup
 
 	// PendingCardIdx is the hand index of a card awaiting placement target.
@@ -100,6 +102,7 @@ func (c *Combat) startPlayerTurn() {
 	if c.Phase == PhaseWon {
 		return
 	}
+	c.Turn++
 	c.Energy = StartingEnergy
 	c.MaxEnergy = StartingEnergy
 	c.PlayerArmor = 0
