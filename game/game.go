@@ -65,16 +65,29 @@ func (g *Game) handleCombatInput() {
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		mx, my := ebiten.CursorPosition()
 		if i := ui.HitCard(c, mx, my); i >= 0 {
-			c.PlayCard(i)
+			c.StageCard(i)
 		} else if ui.HitEndTurn(mx, my) {
-			c.EndTurn()
+			g.advanceTurn(c)
 		} else if rx, ry, ok := ui.HitRadar(mx, my); ok {
 			c.MoveTowards(rx, ry)
 		}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyE) {
-		c.EndTurn()
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
+		c.UnstageLast()
 	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyE) {
+		g.advanceTurn(c)
+	}
+}
+
+// advanceTurn casts the staged spell if any runes are staged; otherwise ends
+// the turn. This collapses "E to cast" and "E to end turn" into the same key.
+func (g *Game) advanceTurn(c *combat.Combat) {
+	if len(c.Stage) > 0 {
+		c.CastSpell()
+		return
+	}
+	c.EndTurn()
 }
 
 func (g *Game) handleRewardInput() {

@@ -29,6 +29,12 @@ const (
 	EndTurnX, EndTurnY  = 1100, 660
 	EndTurnW, EndTurnH = 140, 60
 
+	StageY      = 470
+	StageCardW  = 100
+	StageCardH  = 100
+	StageGap    = 10
+	StageStartX = 80
+
 	// Reward screen layout
 	RewardCardW    = 220
 	RewardCardH    = 300
@@ -120,11 +126,40 @@ func drawCombatScreen(screen *ebiten.Image, v RunView) {
 	drawRadar(screen, c)
 	drawPopups(screen, c)
 	drawPlacementPreview(screen, c)
+	drawStage(screen, c)
 	drawHand(screen, c)
 	drawHUD(screen, v)
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
+}
+
+func drawStage(screen *ebiten.Image, c *combat.Combat) {
+	header := "Spell stage (right-click to unstage):"
+	if c.SpellCast {
+		header = "Spell cast — press E to end turn"
+	} else if len(c.Stage) == 0 {
+		header = "Spell stage:  (click a rune to add it)"
+	}
+	ebitenutil.DebugPrintAt(screen, header, StageStartX, StageY-20)
+
+	for i, sc := range c.Stage {
+		x := StageStartX + i*(StageCardW+StageGap)
+		y := StageY
+		vector.DrawFilledRect(screen, float32(x), float32(y), StageCardW, StageCardH, cardBg, true)
+		vector.StrokeRect(screen, float32(x), float32(y), StageCardW, StageCardH, 1, tooltipEdge, true)
+		ebitenutil.DebugPrintAt(screen, sc.Card.Glyph, x+8, y+6)
+		ebitenutil.DebugPrintAt(screen, sc.Card.Name, x+8, y+24)
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", sc.Card.Cost), x+8, y+StageCardH-20)
+	}
+	if !c.SpellCast && len(c.Stage) > 0 {
+		total := 0
+		for _, sc := range c.Stage {
+			total += sc.Card.Cost
+		}
+		summary := fmt.Sprintf("%d rune(s), %d energy — press E to cast", len(c.Stage), total)
+		ebitenutil.DebugPrintAt(screen, summary, StageStartX, StageY+StageCardH+8)
+	}
 }
 
 func drawPlacementPreview(screen *ebiten.Image, c *combat.Combat) {
@@ -307,9 +342,12 @@ func cardRect(i int) (int, int) {
 	return CardStartX + i*(CardW+CardGap), HandY
 }
 
-// cardPlayable evaluates both energy and CanPlay constraints. Returns
-// playable + a short reason if not.
+// cardPlayable evaluates whether a hand card can be staged right now,
+// accounting for spell-already-cast, energy, and CanPlay constraints.
 func cardPlayable(c *combat.Combat, card runes.Card) (bool, string) {
+	if c.SpellCast {
+		return false, "spell already cast this turn"
+	}
 	if card.Cost > c.Energy {
 		return false, "not enough energy"
 	}
@@ -402,8 +440,12 @@ func drawEndTurn(screen *ebiten.Image, c *combat.Combat) {
 	if c.Phase != 0 { // not player turn
 		col = cardBgDim
 	}
+	label := "END TURN"
+	if len(c.Stage) > 0 {
+		label = fmt.Sprintf("CAST (%d)", len(c.Stage))
+	}
 	vector.DrawFilledRect(screen, EndTurnX, EndTurnY, EndTurnW, EndTurnH, col, true)
-	ebitenutil.DebugPrintAt(screen, "END TURN", EndTurnX+30, EndTurnY+24)
+	ebitenutil.DebugPrintAt(screen, label, EndTurnX+18, EndTurnY+24)
 }
 
 func drawPhaseBanner(screen *ebiten.Image, c *combat.Combat) {

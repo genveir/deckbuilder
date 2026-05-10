@@ -59,6 +59,13 @@ type Player struct {
 	X, Y float64
 }
 
+// StagedCard is a rune queued for a single composed spell, paired with its
+// placement target if the rune required one.
+type StagedCard struct {
+	Card           runes.Card
+	PlaceX, PlaceY float64
+}
+
 type Combat struct {
 	Player                Player
 	PlayerHP, PlayerMaxHP int
@@ -70,6 +77,11 @@ type Combat struct {
 	Walls   []*Wall
 
 	Draw, Hand, Discard []runes.Card
+
+	// Stage holds runes queued for the current turn's single composed spell.
+	// SpellCast is true once the spell has been cast — no more staging this turn.
+	Stage     []StagedCard
+	SpellCast bool
 
 	MovementBudget float64 // remaining movement this turn
 	hasMoved       bool
@@ -125,6 +137,8 @@ func (c *Combat) startPlayerTurn() {
 	c.PlayerArmor = 0
 	c.MovementBudget = BaseMovement
 	c.hasMoved = false
+	c.Stage = c.Stage[:0]
+	c.SpellCast = false
 	c.refreshIntents()
 	c.drawUpTo(HandSize)
 	c.Phase = PhasePlayer
@@ -189,12 +203,15 @@ func (c *Combat) drawUpTo(n int) {
 	}
 }
 
-// PlayCard plays the card at hand index i. If the card requires placement,
-// the card is held pending (PendingCardIdx is set) and (true, true) is returned;
-// the caller must drive ConfirmPlacement / CancelPlacement next. Otherwise the
-// effect runs immediately.
-func (c *Combat) PlayCard(i int) (played, needsPlacement bool) {
-	if c.Phase != PhasePlayer || c.PendingCardIdx >= 0 || i < 0 || i >= len(c.Hand) {
+// StageCard adds a rune to the spell being composed this turn. Only one
+// spell may be cast per turn, so once SpellCast is true, no more staging.
+// Placement-required cards return (true, true) and stay pending until
+// ConfirmPlacement; instant-effect cards stage immediately.
+func (c *Combat) StageCard(i int) (staged, needsPlacement bool) {
+	if c.Phase != PhasePlayer || c.SpellCast || c.PendingCardIdx >= 0 {
+		return false, false
+	}
+	if i < 0 || i >= len(c.Hand) {
 		return false, false
 	}
 	card := c.Hand[i]
@@ -211,15 +228,12 @@ func (c *Combat) PlayCard(i int) (played, needsPlacement bool) {
 		return true, true
 	}
 	c.Energy -= card.Cost
-	card.Effect(c)
+	c.Stage = append(c.Stage, StagedCard{Card: card})
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
-	c.Discard = append(c.Discard, card)
-	c.refreshIntents()
-	c.checkVictory()
 	return true, false
 }
 
-// ConfirmPlacement resolves the pending card with the chosen radar target.
+// ConfirmPlacement stages the pending card with the chosen world target.
 func (c *Combat) ConfirmPlacement(x, y float64) bool {
 	if c.PendingCardIdx < 0 || c.PendingCardIdx >= len(c.Hand) {
 		c.PendingCardIdx = -1
@@ -228,16 +242,50 @@ func (c *Combat) ConfirmPlacement(x, y float64) bool {
 	i := c.PendingCardIdx
 	card := c.Hand[i]
 	c.Energy -= card.Cost
-	card.PlacementEffect(c, x, y)
+	c.Stage = append(c.Stage, StagedCard{Card: card, PlaceX: x, PlaceY: y})
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
-	c.Discard = append(c.Discard, card)
 	c.PendingCardIdx = -1
-	c.refreshIntents()
-	c.checkVictory()
 	return true
 }
 
 func (c *Combat) CancelPlacement() { c.PendingCardIdx = -1 }
+
+// UnstageLast returns the most recently staged rune to the player's hand,
+// refunding its energy. Used as a one-step undo before the spell is cast.
+func (c *Combat) UnstageLast() bool {
+	if c.SpellCast || len(c.Stage) == 0 {
+		return false
+	}
+	last := c.Stage[len(c.Stage)-1]
+	c.Stage = c.Stage[:len(c.Stage)-1]
+	c.Energy += last.Card.Cost
+	c.Hand = append(c.Hand, last.Card)
+	return true
+}
+
+// CastSpell resolves all staged runes in stage order, sets SpellCast, and
+// moves the cards to discard. Movement budget is independent and untouched.
+func (c *Combat) CastSpell() bool {
+	if c.Phase != PhasePlayer || c.SpellCast || len(c.Stage) == 0 {
+		return false
+	}
+	for _, sc := range c.Stage {
+		switch {
+		case sc.Card.Effect != nil:
+			sc.Card.Effect(c)
+		case sc.Card.PlacementEffect != nil:
+			sc.Card.PlacementEffect(c, sc.PlaceX, sc.PlaceY)
+		}
+	}
+	for _, sc := range c.Stage {
+		c.Discard = append(c.Discard, sc.Card)
+	}
+	c.Stage = c.Stage[:0]
+	c.SpellCast = true
+	c.refreshIntents()
+	c.checkVictory()
+	return true
+}
 
 // MoveTowards moves the player along the given offset (radar-relative delta),
 // consuming movement budget. Walls block movement: the player stops just
