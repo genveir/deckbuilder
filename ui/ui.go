@@ -42,6 +42,9 @@ var (
 	white        = color.RGBA{240, 240, 240, 255}
 	yellow       = color.RGBA{240, 220, 100, 255}
 	green        = color.RGBA{120, 220, 120, 255}
+	moveOkCol    = color.RGBA{120, 220, 140, 220}
+	moveOverCol  = color.RGBA{230, 160, 90, 220}
+	moveRingCol  = color.RGBA{120, 220, 140, 90}
 )
 
 func Draw(screen *ebiten.Image, c *combat.Combat) {
@@ -58,6 +61,7 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 	for _, r := range []float32{RadarRadius * 0.33, RadarRadius * 0.66, RadarRadius} {
 		vector.StrokeCircle(screen, RadarCX, RadarCY, r, 1, radarRing, true)
 	}
+	drawMovePreview(screen, c)
 	// player dot
 	vector.DrawFilledCircle(screen, RadarCX, RadarCY, 8, playerColor, true)
 
@@ -75,6 +79,47 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 			ebitenutil.DebugPrintAt(screen, "intent: "+e.Intent, int(ex)-30, int(ey)+28)
 		}
 	}
+}
+
+func drawMovePreview(screen *ebiten.Image, c *combat.Combat) {
+	if c.Phase != combat.PhasePlayer {
+		return
+	}
+	if c.MovementBudget <= 0 {
+		return
+	}
+	// Budget ring around the player.
+	vector.StrokeCircle(screen, RadarCX, RadarCY, float32(c.MovementBudget), 1, moveRingCol, true)
+
+	mx, my := ebiten.CursorPosition()
+	rx, ry, ok := HitRadar(mx, my)
+	if !ok {
+		return
+	}
+	dist := math.Hypot(rx, ry)
+	if dist < 1 {
+		return
+	}
+	inBudget := dist <= c.MovementBudget
+	step := dist
+	if !inBudget {
+		step = c.MovementBudget
+	}
+	gx := float32(RadarCX + rx/dist*step)
+	gy := float32(RadarCY + ry/dist*step)
+
+	col := moveOkCol
+	if !inBudget {
+		col = moveOverCol
+	}
+	vector.StrokeLine(screen, RadarCX, RadarCY, gx, gy, 2, col, true)
+	vector.StrokeCircle(screen, gx, gy, 8, 2, col, true)
+
+	label := fmt.Sprintf("%.0f / %.0f", dist, c.MovementBudget)
+	if !inBudget {
+		label += "  (clamped)"
+	}
+	ebitenutil.DebugPrintAt(screen, label, int(gx)+12, int(gy)-6)
 }
 
 func drawHand(screen *ebiten.Image, c *combat.Combat) {
