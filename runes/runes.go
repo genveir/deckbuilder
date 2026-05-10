@@ -13,6 +13,7 @@ type Class int
 const (
 	ClassElementalist Class = iota
 	ClassMesmer
+	ClassNecromancer
 )
 
 func (c Class) String() string {
@@ -21,6 +22,8 @@ func (c Class) String() string {
 		return "Elementalist"
 	case ClassMesmer:
 		return "Mesmer"
+	case ClassNecromancer:
+		return "Necromancer"
 	default:
 		return "Unknown"
 	}
@@ -39,6 +42,13 @@ type World interface {
 	NearestIntendsAttack() bool
 	DelayNearest(turns int)
 	DelayAll(turns int)
+	SummonMinion(power, hp int)
+	DrainNearest(amount int)
+	SacrificeNearestMinion(consumeHP, dmg int)
+	HasMinion() bool
+	HealPlayer(amount int)
+	LoseHP(amount int)
+	AddEnergy(amount int)
 }
 
 type Card struct {
@@ -151,6 +161,44 @@ func IsaPassive() Card {
 	}
 }
 
+// --- Necromancer cards ---
+
+func Thurisaz() Card {
+	return Card{
+		Name:        "Thurisaz",
+		Glyph:       "ᚦ",
+		Cost:        2,
+		Description: "Summon a minion: deals 3 damage / turn (8 HP).",
+		Effect:      func(w World) { w.SummonMinion(3, 8) },
+	}
+}
+
+func Madr() Card {
+	return Card{
+		Name:        "Maðr",
+		Glyph:       "ᛘ",
+		Cost:        1,
+		Description: "Drain: deal 4 damage to the nearest enemy and heal 4.",
+		Effect:      func(w World) { w.DrainNearest(4) },
+	}
+}
+
+func Ar() Card {
+	return Card{
+		Name:        "Ár",
+		Glyph:       "ᛅ",
+		Cost:        0,
+		Description: "Sacrifice 4 HP from your nearest minion to deal 4 damage to the nearest enemy.",
+		Effect:      func(w World) { w.SacrificeNearestMinion(4, 4) },
+		CanPlay: func(w World) (bool, string) {
+			if !w.HasMinion() {
+				return false, "requires a living minion"
+			}
+			return true, ""
+		},
+	}
+}
+
 // --- Reward pool (cards offered between combats) ---
 
 func StrongFireAttack() Card {
@@ -255,11 +303,59 @@ func ColdIsa() Card {
 	}
 }
 
+func GreaterThurisaz() Card {
+	return Card{
+		Name:        "Greater Thurisaz",
+		Glyph:       "ᚦ+",
+		Cost:        2,
+		Description: "Summon a stronger minion: deals 5 damage / turn (12 HP).",
+		Effect:      func(w World) { w.SummonMinion(5, 12) },
+	}
+}
+
+func Reanimate() Card {
+	return Card{
+		Name:        "Reanimate",
+		Glyph:       "ᚢ",
+		Cost:        2,
+		Description: "Summon two weak minions: 2 damage / turn each (4 HP).",
+		Effect: func(w World) {
+			w.SummonMinion(2, 4)
+			w.SummonMinion(2, 4)
+		},
+	}
+}
+
+func MassDrain() Card {
+	return Card{
+		Name:        "Mass Drain",
+		Glyph:       "ᛘ+",
+		Cost:        2,
+		Description: "Drain: deal 6 damage to the nearest enemy and heal 6.",
+		Effect:      func(w World) { w.DrainNearest(6) },
+	}
+}
+
+func Ritual() Card {
+	return Card{
+		Name:        "Ritual",
+		Glyph:       "ᛟ",
+		Cost:        0,
+		Description: "Lose 5 HP. Gain 2 energy this turn.",
+		Effect: func(w World) {
+			w.LoseHP(5)
+			w.AddEnergy(2)
+		},
+	}
+}
+
 // StarterDeck returns the starting deck for the chosen class.
 func StarterDeck(c Class) []Card {
 	switch c {
 	case ClassMesmer:
 		return mesmerStarter()
+	case ClassNecromancer:
+		return necromancerStarter()
 	default:
 		return elementalistStarter()
 	}
@@ -276,6 +372,13 @@ func RewardPool(c Class) []Card {
 			SharpIsa(),
 			ColdIsa(),
 			Sprint(),
+		}
+	case ClassNecromancer:
+		return []Card{
+			GreaterThurisaz(),
+			Reanimate(),
+			MassDrain(),
+			Ritual(),
 		}
 	default:
 		return []Card{
@@ -297,6 +400,20 @@ func elementalistStarter() []Card {
 	}
 	for i := 0; i < 2; i++ {
 		deck = append(deck, FrostAttack())
+	}
+	return deck
+}
+
+func necromancerStarter() []Card {
+	deck := make([]Card, 0, 10)
+	for i := 0; i < 4; i++ {
+		deck = append(deck, Thurisaz())
+	}
+	for i := 0; i < 3; i++ {
+		deck = append(deck, Madr())
+	}
+	for i := 0; i < 3; i++ {
+		deck = append(deck, Ar())
 	}
 	return deck
 }

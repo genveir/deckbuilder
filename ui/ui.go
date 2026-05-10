@@ -81,6 +81,7 @@ var (
 	fireCol     = color.RGBA{255, 150, 70, 255}
 	frostCol    = color.RGBA{120, 200, 255, 255}
 	physicalCol = color.RGBA{230, 230, 230, 255}
+	minionCol   = color.RGBA{120, 220, 160, 255}
 )
 
 func damageTypeColor(t runes.DamageType) color.RGBA {
@@ -181,6 +182,17 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 		if e.HP > 0 && e.Intent != "" {
 			ebitenutil.DebugPrintAt(screen, "intent: "+e.Intent, int(ex)-30, int(ey)+28)
 		}
+	}
+
+	for _, m := range c.Minions {
+		if m.HP <= 0 {
+			continue
+		}
+		mx := float32(RadarCX + m.X)
+		my := float32(RadarCY + m.Y)
+		vector.DrawFilledCircle(screen, mx, my, 7, minionCol, true)
+		label := fmt.Sprintf("M %d/%d  (%d/t)", m.HP, m.MaxHP, m.AttackPower)
+		ebitenutil.DebugPrintAt(screen, label, int(mx)-32, int(my)+10)
 	}
 }
 
@@ -468,10 +480,10 @@ func HitSkipReward(mx, my int) bool {
 // --- Class select screen ---
 
 const (
-	classCardW  = 360
-	classCardH  = 380
-	classGap    = 80
-	classTopY   = 200
+	classCardW = 320
+	classCardH = 400
+	classGap   = 40
+	classTopY  = 180
 )
 
 type classOption struct {
@@ -507,6 +519,20 @@ func classOptions() []classOption {
 				"",
 				"Starter: 2 Aphyr, 3 Isa-aggressive,",
 				"3 Isa-passive, 2 Move.",
+			},
+		},
+		{
+			class: runes.ClassNecromancer,
+			title: "Necromancer",
+			description: []string{
+				"Summons minions as persistent",
+				"processes that occupy the radar.",
+				"",
+				"Defense: minions intercept aggression.",
+				"Drain heals; sacrifice burns minion HP",
+				"for damage.",
+				"",
+				"Starter: 4 Thurisaz, 3 Maðr, 3 Ár.",
 			},
 		},
 	}

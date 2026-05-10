@@ -37,12 +37,21 @@ type DamagePopup struct {
 
 const PopupLife = 1.1
 
+// Minion is a Necromancer-summoned process that occupies a radar position and
+// runs an embedded program every turn (currently: damage nearest enemy).
+type Minion struct {
+	HP, MaxHP   int
+	X, Y        float64
+	AttackPower int
+}
+
 type Combat struct {
 	PlayerHP, PlayerMaxHP int
 	PlayerArmor           int
 	Energy, MaxEnergy     int
 
 	Enemies []*enemies.Enemy
+	Minions []*Minion
 
 	Draw, Hand, Discard []runes.Card
 
@@ -80,6 +89,12 @@ func (c *Combat) shuffle(cards []runes.Card) {
 }
 
 func (c *Combat) startPlayerTurn() {
+	c.compactMinions()
+	c.runMinionPrograms()
+	c.checkVictory()
+	if c.Phase == PhaseWon {
+		return
+	}
 	c.Energy = StartingEnergy
 	c.MaxEnergy = StartingEnergy
 	c.PlayerArmor = 0
@@ -88,6 +103,50 @@ func (c *Combat) startPlayerTurn() {
 	c.refreshIntents()
 	c.drawUpTo(HandSize)
 	c.Phase = PhasePlayer
+}
+
+func (c *Combat) compactMinions() {
+	out := c.Minions[:0]
+	for _, m := range c.Minions {
+		if m.HP > 0 {
+			out = append(out, m)
+		}
+	}
+	c.Minions = out
+}
+
+func (c *Combat) runMinionPrograms() {
+	for _, m := range c.Minions {
+		if m.HP <= 0 {
+			continue
+		}
+		var target *enemies.Enemy
+		best := math.Inf(1)
+		for _, e := range c.Enemies {
+			if e.HP <= 0 {
+				continue
+			}
+			d := math.Hypot(e.X-m.X, e.Y-m.Y)
+			if d < best {
+				best = d
+				target = e
+			}
+		}
+		if target == nil {
+			continue
+		}
+		dealt := m.AttackPower
+		if target.Weakness == runes.Physical {
+			dealt = (dealt*3 + 1) / 2
+		}
+		target.HP -= dealt
+		if target.HP < 0 {
+			target.HP = 0
+		}
+		c.Popups = append(c.Popups, DamagePopup{
+			X: target.X, Y: target.Y, Amount: dealt, Type: runes.Physical,
+		})
+	}
 }
 
 func (c *Combat) drawUpTo(n int) {
@@ -146,6 +205,10 @@ func (c *Combat) MoveTowards(tx, ty float64) float64 {
 		e.X -= dx
 		e.Y -= dy
 	}
+	for _, m := range c.Minions {
+		m.X -= dx
+		m.Y -= dy
+	}
 	for i := range c.Popups {
 		c.Popups[i].X -= dx
 		c.Popups[i].Y -= dy
@@ -199,24 +262,75 @@ func (c *Combat) Update(dt float64) {
 	c.checkVictory()
 }
 
+// aggroTarget represents what an enemy will hit this turn. Enemies aggro on
+// the nearest dot — player or minion — implementing the design's "dumb enemies
+// always target nearest" rule.
+type aggroTarget struct {
+	minion *Minion // nil means the player at (0,0)
+	x, y   float64
+}
+
+func (t aggroTarget) isMinion() bool { return t.minion != nil }
+
+func (c *Combat) chooseTarget(e *enemies.Enemy) aggroTarget {
+	best := aggroTarget{x: 0, y: 0}
+	bestDist := math.Hypot(e.X, e.Y)
+	for _, m := range c.Minions {
+		if m.HP <= 0 {
+			continue
+		}
+		d := math.Hypot(e.X-m.X, e.Y-m.Y)
+		if d < bestDist {
+			bestDist = d
+			best = aggroTarget{minion: m, x: m.X, y: m.Y}
+		}
+	}
+	return best
+}
+
 // Default enemy program (design §8). Ranged casters drift forward while
-// chipping the player every turn; pure melee enemies move-or-attack.
+// chipping every turn; pure melee enemies move-or-attack. Either may strike
+// the player or an intercepting minion, whichever is nearest.
 func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
-	dist := math.Hypot(e.X, e.Y)
+	t := c.chooseTarget(e)
+	dist := math.Hypot(e.X-t.x, e.Y-t.y)
+	apply := func(dmg int) {
+		if t.isMinion() {
+			t.minion.HP -= dmg
+			if t.minion.HP < 0 {
+				t.minion.HP = 0
+			}
+			c.Popups = append(c.Popups, DamagePopup{
+				X: t.x, Y: t.y, Amount: dmg, Type: runes.Physical,
+			})
+			return
+		}
+		c.applyDamageToPlayer(dmg)
+	}
+	moveToward := func(step float64) {
+		dx := t.x - e.X
+		dy := t.y - e.Y
+		n := math.Hypot(dx, dy)
+		if n == 0 {
+			return
+		}
+		e.X += dx / n * step
+		e.Y += dy / n * step
+	}
+
 	if e.RangedPower > 0 {
-		c.applyDamageToPlayer(e.RangedPower)
+		apply(e.RangedPower)
 		e.Intent = "cast"
 		if dist > e.MeleeRange {
 			step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
 			if step > 0 {
-				e.X -= e.X / dist * step
-				e.Y -= e.Y / dist * step
+				moveToward(step)
 			}
 		}
 		return
 	}
 	if dist <= e.MeleeRange {
-		c.applyDamageToPlayer(e.AttackPower)
+		apply(e.AttackPower)
 		e.Intent = "attacked"
 		return
 	}
@@ -224,8 +338,7 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	if step <= 0 {
 		return
 	}
-	e.X -= e.X / dist * step
-	e.Y -= e.Y / dist * step
+	moveToward(step)
 	e.Intent = "approached"
 }
 
@@ -240,13 +353,19 @@ func (c *Combat) refreshIntents() {
 			e.Intent = "delayed"
 			continue
 		}
+		t := c.chooseTarget(e)
+		dist := math.Hypot(e.X-t.x, e.Y-t.y)
+		suffix := ""
+		if t.isMinion() {
+			suffix = " minion"
+		}
 		switch {
 		case e.RangedPower > 0:
-			e.Intent = fmt.Sprintf("cast (%d)", e.RangedPower)
-		case math.Hypot(e.X, e.Y) <= e.MeleeRange:
-			e.Intent = fmt.Sprintf("attack (%d)", e.AttackPower)
+			e.Intent = fmt.Sprintf("cast%s (%d)", suffix, e.RangedPower)
+		case dist <= e.MeleeRange:
+			e.Intent = fmt.Sprintf("attack%s (%d)", suffix, e.AttackPower)
 		default:
-			e.Intent = "approach"
+			e.Intent = "approach" + suffix
 		}
 	}
 }
@@ -363,7 +482,7 @@ func (c *Combat) HasMoved() bool { return c.hasMoved }
 func (c *Combat) ConsumeAllMovement() { c.MovementBudget = 0 }
 
 // NearestIntendsAttack returns true if the nearest living, non-stunned enemy
-// will deal damage to the player on its next turn.
+// will deal damage to the player on its next turn (not to a minion).
 func (c *Combat) NearestIntendsAttack() bool {
 	var target *enemies.Enemy
 	best := math.Inf(1)
@@ -378,6 +497,10 @@ func (c *Combat) NearestIntendsAttack() bool {
 		}
 	}
 	if target == nil {
+		return false
+	}
+	t := c.chooseTarget(target)
+	if t.isMinion() {
 		return false
 	}
 	if target.RangedPower > 0 {
@@ -402,3 +525,77 @@ func (c *Combat) DelayAll(turns int) {
 		e.Stunned += turns
 	}
 }
+
+// --- Necromancer World methods ---
+
+func (c *Combat) SummonMinion(power, hp int) {
+	x, y := 50.0, 0.0
+	if t := c.nearestLiving(); t != nil {
+		d := math.Hypot(t.X, t.Y)
+		if d > 0 {
+			x = t.X / d * 50
+			y = t.Y / d * 50
+		}
+	}
+	c.Minions = append(c.Minions, &Minion{
+		HP: hp, MaxHP: hp,
+		X: x, Y: y,
+		AttackPower: power,
+	})
+}
+
+func (c *Combat) DrainNearest(amount int) {
+	c.DamageNearest(amount, runes.Physical)
+	c.HealPlayer(amount)
+}
+
+func (c *Combat) HealPlayer(amount int) {
+	c.PlayerHP += amount
+	if c.PlayerHP > c.PlayerMaxHP {
+		c.PlayerHP = c.PlayerMaxHP
+	}
+}
+
+func (c *Combat) SacrificeNearestMinion(consumeHP, dmg int) {
+	var nearest *Minion
+	best := math.Inf(1)
+	for _, m := range c.Minions {
+		if m.HP <= 0 {
+			continue
+		}
+		d := math.Hypot(m.X, m.Y)
+		if d < best {
+			best = d
+			nearest = m
+		}
+	}
+	if nearest == nil {
+		return
+	}
+	nearest.HP -= consumeHP
+	if nearest.HP < 0 {
+		nearest.HP = 0
+	}
+	c.DamageNearest(dmg, runes.Physical)
+}
+
+func (c *Combat) HasMinion() bool {
+	for _, m := range c.Minions {
+		if m.HP > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Combat) LoseHP(amount int) {
+	c.PlayerHP -= amount
+	if c.PlayerHP < 0 {
+		c.PlayerHP = 0
+	}
+	if c.PlayerHP == 0 {
+		c.Phase = PhaseLost
+	}
+}
+
+func (c *Combat) AddEnergy(amount int) { c.Energy += amount }
