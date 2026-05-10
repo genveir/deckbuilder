@@ -28,6 +28,33 @@ const (
 
 	EndTurnX, EndTurnY  = 1100, 660
 	EndTurnW, EndTurnH = 140, 60
+
+	// Reward screen layout
+	RewardCardW    = 220
+	RewardCardH    = 300
+	RewardGap      = 40
+	RewardTopY     = 220
+	SkipBtnW, SkipBtnH = 220, 50
+)
+
+// RunView is the rendering surface — what game/Run exposes to the UI without
+// the UI depending on the game package.
+type RunView struct {
+	Phase           int
+	Combat          *combat.Combat
+	Rewards         []runes.Card
+	EncounterIdx    int
+	TotalEncounters int
+	PlayerHP, MaxHP int
+	DeckSize        int
+}
+
+// Run phase constants kept in sync with game.RunPhase.
+const (
+	phaseInCombat = 0
+	phaseReward   = 1
+	phaseRunWon   = 2
+	phaseRunLost  = 3
 )
 
 var (
@@ -65,12 +92,29 @@ func damageTypeColor(t runes.DamageType) color.RGBA {
 	}
 }
 
-func Draw(screen *ebiten.Image, c *combat.Combat) {
+func DrawRun(screen *ebiten.Image, v RunView) {
 	screen.Fill(bgColor)
+	switch v.Phase {
+	case phaseInCombat:
+		drawCombatScreen(screen, v)
+	case phaseReward:
+		drawCombatScreen(screen, v) // backdrop
+		drawRewardOverlay(screen, v)
+	case phaseRunWon:
+		drawCombatScreen(screen, v)
+		drawEndOverlay(screen, v, true)
+	case phaseRunLost:
+		drawCombatScreen(screen, v)
+		drawEndOverlay(screen, v, false)
+	}
+}
+
+func drawCombatScreen(screen *ebiten.Image, v RunView) {
+	c := v.Combat
 	drawRadar(screen, c)
 	drawPopups(screen, c)
 	drawHand(screen, c)
-	drawHUD(screen, c)
+	drawHUD(screen, v)
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
@@ -272,13 +316,15 @@ func drawCardTooltip(screen *ebiten.Image, c *combat.Combat) {
 	}
 }
 
-func drawHUD(screen *ebiten.Image, c *combat.Combat) {
+func drawHUD(screen *ebiten.Image, v RunView) {
+	c := v.Combat
 	lines := []string{
+		fmt.Sprintf("Encounter %d / %d", v.EncounterIdx+1, v.TotalEncounters),
 		fmt.Sprintf("HP: %d/%d", c.PlayerHP, c.PlayerMaxHP),
 		fmt.Sprintf("Armor: %d", c.PlayerArmor),
 		fmt.Sprintf("Energy: %d/%d", c.Energy, c.MaxEnergy),
 		fmt.Sprintf("Move: %.0f", c.MovementBudget),
-		fmt.Sprintf("Deck: %d  Discard: %d", len(c.Draw), len(c.Discard)),
+		fmt.Sprintf("Deck: %d  Discard: %d  Total: %d", len(c.Draw), len(c.Discard), v.DeckSize),
 	}
 	for i, l := range lines {
 		ebitenutil.DebugPrintAt(screen, l, 880, 40+i*18)
@@ -296,15 +342,133 @@ func drawEndTurn(screen *ebiten.Image, c *combat.Combat) {
 }
 
 func drawPhaseBanner(screen *ebiten.Image, c *combat.Combat) {
-	switch c.Phase {
-	case 2:
-		ebitenutil.DebugPrintAt(screen, "VICTORY — close the window", 540, 380)
-	case 3:
-		ebitenutil.DebugPrintAt(screen, "DEFEAT — close the window", 540, 380)
-	case 1:
+	if c.Phase == combat.PhaseEnemy {
 		ebitenutil.DebugPrintAt(screen, "(enemy turn)", 560, 700)
 	}
 	_ = green
 	_ = white
 	_ = yellow
+}
+
+// --- Reward screen ---
+
+func rewardCardRect(i, n int) (int, int) {
+	totalW := n*RewardCardW + (n-1)*RewardGap
+	startX := (ScreenW - totalW) / 2
+	x := startX + i*(RewardCardW+RewardGap)
+	return x, RewardTopY
+}
+
+func skipBtnRect() (int, int) {
+	x := (ScreenW - SkipBtnW) / 2
+	y := RewardTopY + RewardCardH + 30
+	return x, y
+}
+
+func drawRewardOverlay(screen *ebiten.Image, v RunView) {
+	// Dim backdrop.
+	vector.DrawFilledRect(screen, 0, 0, ScreenW, ScreenH, color.RGBA{0, 0, 0, 180}, true)
+	ebitenutil.DebugPrintAt(screen, "Choose a rune to add to your deck.", (ScreenW/2)-130, RewardTopY-40)
+
+	mx, my := ebiten.CursorPosition()
+	for i, card := range v.Rewards {
+		x, y := rewardCardRect(i, len(v.Rewards))
+		bg := cardBg
+		hovered := mx >= x && mx < x+RewardCardW && my >= y && my < y+RewardCardH
+		if hovered {
+			bg = cardBgHi
+		}
+		vector.DrawFilledRect(screen, float32(x), float32(y), RewardCardW, RewardCardH, bg, true)
+		vector.StrokeRect(screen, float32(x), float32(y), RewardCardW, RewardCardH, 1, tooltipEdge, true)
+
+		ebitenutil.DebugPrintAt(screen, card.Glyph, x+12, y+12)
+		ebitenutil.DebugPrintAt(screen, card.Name, x+12, y+34)
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", card.Cost), x+12, y+58)
+		// Wrap description across lines.
+		drawWrappedText(screen, card.Description, x+12, y+90, RewardCardW-24, 16)
+	}
+
+	sx, sy := skipBtnRect()
+	bg := cardBg
+	if mx >= sx && mx < sx+SkipBtnW && my >= sy && my < sy+SkipBtnH {
+		bg = cardBgHi
+	}
+	vector.DrawFilledRect(screen, float32(sx), float32(sy), SkipBtnW, SkipBtnH, bg, true)
+	ebitenutil.DebugPrintAt(screen, "SKIP — take nothing", sx+30, sy+18)
+}
+
+// drawWrappedText is a quick word-wrap using the debug font's ~7px-per-char.
+func drawWrappedText(screen *ebiten.Image, s string, x, y, maxW, lineH int) {
+	const charW = 7
+	maxChars := maxW / charW
+	if maxChars < 1 {
+		maxChars = 1
+	}
+	words := splitWords(s)
+	line := ""
+	cy := y
+	for _, w := range words {
+		candidate := w
+		if line != "" {
+			candidate = line + " " + w
+		}
+		if len(candidate) > maxChars && line != "" {
+			ebitenutil.DebugPrintAt(screen, line, x, cy)
+			cy += lineH
+			line = w
+		} else {
+			line = candidate
+		}
+	}
+	if line != "" {
+		ebitenutil.DebugPrintAt(screen, line, x, cy)
+	}
+}
+
+func splitWords(s string) []string {
+	out := []string{}
+	cur := ""
+	for _, r := range s {
+		if r == ' ' || r == '\n' {
+			if cur != "" {
+				out = append(out, cur)
+				cur = ""
+			}
+		} else {
+			cur += string(r)
+		}
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// HitReward returns the index of the reward card at (mx,my), or -1.
+func HitReward(rewards []runes.Card, mx, my int) int {
+	for i := range rewards {
+		x, y := rewardCardRect(i, len(rewards))
+		if mx >= x && mx < x+RewardCardW && my >= y && my < y+RewardCardH {
+			return i
+		}
+	}
+	return -1
+}
+
+func HitSkipReward(mx, my int) bool {
+	x, y := skipBtnRect()
+	return mx >= x && mx < x+SkipBtnW && my >= y && my < y+SkipBtnH
+}
+
+// --- End-of-run overlay ---
+
+func drawEndOverlay(screen *ebiten.Image, v RunView, won bool) {
+	vector.DrawFilledRect(screen, 0, 0, ScreenW, ScreenH, color.RGBA{0, 0, 0, 200}, true)
+	msg := "RUN COMPLETE"
+	if !won {
+		msg = "RUN FAILED"
+	}
+	ebitenutil.DebugPrintAt(screen, msg, ScreenW/2-40, ScreenH/2-20)
+	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Final HP: %d/%d   Deck size: %d", v.PlayerHP, v.MaxHP, v.DeckSize), ScreenW/2-110, ScreenH/2+10)
+	ebitenutil.DebugPrintAt(screen, "Close the window to exit.", ScreenW/2-80, ScreenH/2+40)
 }

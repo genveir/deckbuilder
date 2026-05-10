@@ -12,7 +12,7 @@ const (
 	StartingEnergy   = 3
 	HandSize         = 5
 	BaseMovement     = 30
-	PlayerMaxHP      = 70
+	DefaultMaxHP     = 70
 	EnemyTurnStepDur = 0.4 // seconds per enemy action
 )
 
@@ -58,17 +58,16 @@ type Combat struct {
 	rng *rand.Rand
 }
 
-func New(seed int64) *Combat {
+func New(seed int64, hp, maxHP int, deck []runes.Card, foes []*enemies.Enemy) *Combat {
+	deckCopy := make([]runes.Card, len(deck))
+	copy(deckCopy, deck)
 	c := &Combat{
-		PlayerHP:    PlayerMaxHP,
-		PlayerMaxHP: PlayerMaxHP,
-		Enemies: []*enemies.Enemy{
-			enemies.NewGoblin(140, -60),
-			enemies.NewWraith(-110, 100),
-		},
-		Draw:  runes.ElementalistStarter(),
-		Phase: PhasePlayer,
-		rng:   rand.New(rand.NewSource(seed)),
+		PlayerHP:    hp,
+		PlayerMaxHP: maxHP,
+		Enemies:     foes,
+		Draw:        deckCopy,
+		Phase:       PhasePlayer,
+		rng:         rand.New(rand.NewSource(seed)),
 	}
 	c.shuffle(c.Draw)
 	c.startPlayerTurn()
@@ -290,6 +289,25 @@ func (c *Combat) advancePopups(dt float64) {
 		}
 	}
 	c.Popups = out
+}
+
+func (c *Combat) DamageAll(amount int, dt runes.DamageType) {
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		dealt := amount
+		if e.Weakness == dt {
+			dealt = (amount*3 + 1) / 2
+		}
+		e.HP -= dealt
+		if e.HP < 0 {
+			e.HP = 0
+		}
+		c.Popups = append(c.Popups, DamagePopup{
+			X: e.X, Y: e.Y, Amount: dealt, Type: dt,
+		})
+	}
 }
 
 func (c *Combat) GainArmor(amount int) { c.PlayerArmor += amount }

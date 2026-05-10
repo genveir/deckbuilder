@@ -13,6 +13,7 @@ const (
 // import cycle.
 type World interface {
 	DamageNearest(amount int, dt DamageType)
+	DamageAll(amount int, dt DamageType)
 	GainArmor(amount int)
 	GrantMovement(extra float64)
 	HasMoved() bool
@@ -82,6 +83,69 @@ func Move() Card {
 		Effect: func(w World) {
 			w.GrantMovement(80)
 		},
+	}
+}
+
+// --- Reward pool (cards offered between combats) ---
+
+func StrongFireAttack() Card {
+	return Card{
+		Name:        "Strong Fire Attack",
+		Glyph:       "ᚾ+",
+		Cost:        1,
+		Description: "Deal 9 fire damage to the nearest enemy.",
+		Effect:      func(w World) { w.DamageNearest(9, Fire) },
+	}
+}
+
+func GreaterFireAttack() Card {
+	return Card{
+		Name:        "Greater Fire Attack",
+		Glyph:       "ᚾ++",
+		Cost:        2,
+		Description: "Deal 14 fire damage to the nearest enemy.",
+		Effect:      func(w World) { w.DamageNearest(14, Fire) },
+	}
+}
+
+func Firestorm() Card {
+	return Card{
+		Name:        "Firestorm",
+		Glyph:       "ᚠ",
+		Cost:        2,
+		Description: "Deal 4 fire damage to all enemies.",
+		Effect:      func(w World) { w.DamageAll(4, Fire) },
+	}
+}
+
+func StoneSkin() Card {
+	return Card{
+		Name:        "Stone Skin",
+		Glyph:       "ᛏ",
+		Cost:        2,
+		Description: "Gain 12 armor.",
+		Effect:      func(w World) { w.GainArmor(12) },
+	}
+}
+
+func Sprint() Card {
+	return Card{
+		Name:        "Sprint",
+		Glyph:       "ᚱ+",
+		Cost:        1,
+		Description: "Gain 150 extra movement this turn.",
+		Effect:      func(w World) { w.GrantMovement(150) },
+	}
+}
+
+// RewardPool returns all cards the run may offer between combats.
+func RewardPool() []Card {
+	return []Card{
+		StrongFireAttack(),
+		GreaterFireAttack(),
+		Firestorm(),
+		StoneSkin(),
+		Sprint(),
 	}
 }
 

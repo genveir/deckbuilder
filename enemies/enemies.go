@@ -36,3 +36,15 @@ func NewWraith(x, y float64) *Enemy {
 		Weakness:    runes.Fire,
 	}
 }
+
+func NewTroll(x, y float64) *Enemy {
+	return &Enemy{
+		Name:        "Troll",
+		HP:          55, MaxHP: 55,
+		X: x, Y: y,
+		MeleeRange:  45,
+		MoveSpeed:   30,
+		AttackPower: 13,
+		Weakness:    runes.Fire,
+	}
+}
