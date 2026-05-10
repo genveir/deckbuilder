@@ -90,6 +90,9 @@ type Card struct {
 	PlacementEffect func(World, float64, float64)
 	// PlacementShape controls how the placement target is previewed.
 	PlacementShape PlacementShape
+	// Slow runes make any spell containing them resolve AFTER the enemy turn.
+	// They tend to be powerful effects whose downside is conceding initiative.
+	Slow bool
 	// CanPlay returns whether the card may be played right now and, if not,
 	// a short reason for the UI. nil means always playable (subject to energy).
 	CanPlay func(World) (bool, string)
@@ -157,7 +160,8 @@ func AphyrDelay() Card {
 		Name:        "Aphyr",
 		Glyph:       "ᚬ",
 		Cost:        1,
-		Description: "Delay the nearest enemy's next action by 1 turn.",
+		Description: "Delay the nearest enemy's next action by 1 turn. Slow.",
+		Slow:        true,
 		Effect:      func(w World) { w.DelayNearest(1) },
 	}
 }
@@ -249,7 +253,8 @@ func GreaterFireAttack() Card {
 		Name:        "Greater Fire Attack",
 		Glyph:       "ᚾ++",
 		Cost:        2,
-		Description: "Deal 14 fire damage to the nearest enemy.",
+		Description: "Deal 14 fire damage to the nearest enemy. Slow.",
+		Slow:        true,
 		Effect:      func(w World) { w.DamageNearest(14, Fire) },
 	}
 }

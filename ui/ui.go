@@ -89,6 +89,7 @@ var (
 	physicalCol = color.RGBA{230, 230, 230, 255}
 	minionCol   = color.RGBA{120, 220, 160, 255}
 	wallCol     = color.RGBA{170, 160, 140, 255}
+	slowCol     = color.RGBA{240, 200, 90, 255}
 )
 
 func damageTypeColor(t runes.DamageType) color.RGBA {
@@ -147,17 +148,28 @@ func drawStage(screen *ebiten.Image, c *combat.Combat) {
 		x := StageStartX + i*(StageCardW+StageGap)
 		y := StageY
 		vector.DrawFilledRect(screen, float32(x), float32(y), StageCardW, StageCardH, cardBg, true)
-		vector.StrokeRect(screen, float32(x), float32(y), StageCardW, StageCardH, 1, tooltipEdge, true)
+		edge := tooltipEdge
+		if sc.Card.Slow {
+			edge = slowCol
+		}
+		vector.StrokeRect(screen, float32(x), float32(y), StageCardW, StageCardH, 1, edge, true)
 		ebitenutil.DebugPrintAt(screen, sc.Card.Glyph, x+8, y+6)
 		ebitenutil.DebugPrintAt(screen, sc.Card.Name, x+8, y+24)
 		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", sc.Card.Cost), x+8, y+StageCardH-20)
+		if sc.Card.Slow {
+			drawColoredText(screen, "slow", x+StageCardW-36, y+StageCardH-20, slowCol, 1)
+		}
 	}
 	if !c.SpellCast && len(c.Stage) > 0 {
 		total := 0
 		for _, sc := range c.Stage {
 			total += sc.Card.Cost
 		}
-		summary := fmt.Sprintf("%d rune(s), %d energy — press E to cast", len(c.Stage), total)
+		castVerb := "press E to cast"
+		if c.StageIsSlow() {
+			castVerb = "press E to cast — SLOW (resolves after enemies)"
+		}
+		summary := fmt.Sprintf("%d rune(s), %d energy — %s", len(c.Stage), total, castVerb)
 		ebitenutil.DebugPrintAt(screen, summary, StageStartX, StageY+StageCardH+8)
 	}
 }
@@ -335,6 +347,9 @@ func drawHand(screen *ebiten.Image, c *combat.Combat) {
 		ebitenutil.DebugPrintAt(screen, card.Glyph, x+8, y+6)
 		ebitenutil.DebugPrintAt(screen, card.Name, x+8, y+24)
 		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", card.Cost), x+8, y+CardH-22)
+		if card.Slow {
+			drawColoredText(screen, "slow", x+CardW-36, y+CardH-22, slowCol, 1)
+		}
 	}
 }
 
@@ -442,10 +457,14 @@ func drawEndTurn(screen *ebiten.Image, c *combat.Combat) {
 	}
 	label := "END TURN"
 	if len(c.Stage) > 0 {
-		label = fmt.Sprintf("CAST (%d)", len(c.Stage))
+		if c.StageIsSlow() {
+			label = fmt.Sprintf("CAST SLOW (%d)", len(c.Stage))
+		} else {
+			label = fmt.Sprintf("CAST (%d)", len(c.Stage))
+		}
 	}
 	vector.DrawFilledRect(screen, EndTurnX, EndTurnY, EndTurnW, EndTurnH, col, true)
-	ebitenutil.DebugPrintAt(screen, label, EndTurnX+18, EndTurnY+24)
+	ebitenutil.DebugPrintAt(screen, label, EndTurnX+12, EndTurnY+24)
 }
 
 func drawPhaseBanner(screen *ebiten.Image, c *combat.Combat) {

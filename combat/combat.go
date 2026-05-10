@@ -83,6 +83,10 @@ type Combat struct {
 	Stage     []StagedCard
 	SpellCast bool
 
+	// pendingSlowSpell holds a slow-cast spell awaiting resolution after the
+	// enemy phase. Set when the player casts a spell containing any Slow rune.
+	pendingSlowSpell []StagedCard
+
 	MovementBudget float64 // remaining movement this turn
 	hasMoved       bool
 	Phase          Phase
@@ -263,13 +267,43 @@ func (c *Combat) UnstageLast() bool {
 	return true
 }
 
-// CastSpell resolves all staged runes in stage order, sets SpellCast, and
-// moves the cards to discard. Movement budget is independent and untouched.
+// StageIsSlow reports whether any rune currently staged is Slow — meaning
+// casting will defer resolution until after the enemy phase.
+func (c *Combat) StageIsSlow() bool {
+	for _, sc := range c.Stage {
+		if sc.Card.Slow {
+			return true
+		}
+	}
+	return false
+}
+
+// CastSpell resolves all staged runes. If any are Slow, the spell is queued
+// to resolve after the upcoming enemy phase and the player turn ends
+// immediately. Movement budget is unaffected by casting itself.
 func (c *Combat) CastSpell() bool {
 	if c.Phase != PhasePlayer || c.SpellCast || len(c.Stage) == 0 {
 		return false
 	}
-	for _, sc := range c.Stage {
+	if c.StageIsSlow() {
+		c.pendingSlowSpell = append(c.pendingSlowSpell[:0], c.Stage...)
+		c.Stage = c.Stage[:0]
+		c.SpellCast = true
+		c.EndTurn() // hand to discard, transition to PhaseEnemy
+		return true
+	}
+	c.resolveSpell(c.Stage)
+	c.Stage = c.Stage[:0]
+	c.SpellCast = true
+	c.refreshIntents()
+	c.checkVictory()
+	return true
+}
+
+// resolveSpell runs the effects of every staged rune in order and discards
+// the cards. Caller is responsible for clearing the source slice.
+func (c *Combat) resolveSpell(stage []StagedCard) {
+	for _, sc := range stage {
 		switch {
 		case sc.Card.Effect != nil:
 			sc.Card.Effect(c)
@@ -277,14 +311,9 @@ func (c *Combat) CastSpell() bool {
 			sc.Card.PlacementEffect(c, sc.PlaceX, sc.PlaceY)
 		}
 	}
-	for _, sc := range c.Stage {
+	for _, sc := range stage {
 		c.Discard = append(c.Discard, sc.Card)
 	}
-	c.Stage = c.Stage[:0]
-	c.SpellCast = true
-	c.refreshIntents()
-	c.checkVictory()
-	return true
 }
 
 // MoveTowards moves the player along the given offset (radar-relative delta),
@@ -419,6 +448,16 @@ func (c *Combat) Update(dt float64) {
 			return
 		}
 		return // one enemy per tick
+	}
+	// All enemies have acted. Resolve any deferred slow spell before starting
+	// the next player turn.
+	if len(c.pendingSlowSpell) > 0 {
+		c.resolveSpell(c.pendingSlowSpell)
+		c.pendingSlowSpell = c.pendingSlowSpell[:0]
+		c.checkVictory()
+		if c.Phase == PhaseWon {
+			return
+		}
 	}
 	c.startPlayerTurn()
 	c.checkVictory()
