@@ -103,6 +103,8 @@ type Combat struct {
 	enemyIndex int
 	enemyTimer float64
 
+	grid *navGrid
+
 	rng *rand.Rand
 }
 
@@ -491,9 +493,12 @@ func (c *Combat) chooseTarget(e *enemies.Enemy) aggroTarget {
 
 // Default enemy program (design §8). Ranged casters drift forward while
 // chipping every turn; pure melee enemies move-or-attack. Either may strike
-// the player or an intercepting minion, whichever is nearest. If a wall
-// blocks the path to target, melee enemies attack the wall in melee range or
-// approach the wall otherwise; ranged spells ignore walls.
+// the player or an intercepting minion, whichever is nearest.
+//
+// Pathing: melee enemies use grid A* to route around walls when possible.
+// If no path exists (target enclosed) or the enemy is already adjacent to a
+// blocker on the direct line, they smash the wall instead of detouring.
+// Ranged spells ignore walls.
 func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	t := c.chooseTarget(e)
 	dist := math.Hypot(e.X-t.x, e.Y-t.y)
@@ -510,15 +515,16 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 		}
 		c.applyDamageToPlayer(dmg)
 	}
-	moveTo := func(tx, ty, step float64) {
+	moveTowardPoint := func(tx, ty, step float64) {
 		dx := tx - e.X
 		dy := ty - e.Y
 		n := math.Hypot(dx, dy)
 		if n == 0 {
 			return
 		}
-		e.X += dx / n * step
-		e.Y += dy / n * step
+		s := math.Min(step, n)
+		e.X += dx / n * s
+		e.Y += dy / n * s
 	}
 
 	if e.RangedPower > 0 {
@@ -527,13 +533,28 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 		if dist > e.MeleeRange {
 			step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
 			if step > 0 {
-				moveTo(t.x, t.y, step)
+				moveTowardPoint(t.x, t.y, step)
 			}
 		}
 		return
 	}
 
-	// Melee path: respect walls.
+	// Melee: can we hit the target right now? Direct LOS + range required.
+	if dist <= e.MeleeRange && c.hasLOS(e.X, e.Y, t.x, t.y) {
+		apply(e.AttackPower, runes.Physical)
+		e.Intent = "attacked"
+		return
+	}
+
+	// Try to path around walls.
+	if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
+		nx, ny := c.smoothPathStep(e.X, e.Y, path, e.MoveSpeed)
+		moveTowardPoint(nx, ny, e.MoveSpeed)
+		e.Intent = "approached"
+		return
+	}
+
+	// No path — fall back to wall-smashing on the direct line.
 	if blocker, _, _ := c.firstWallHit(e.X, e.Y, t.x, t.y); blocker != nil {
 		cpx, cpy := closestPointOnSegment(e.X, e.Y, blocker.X1, blocker.Y1, blocker.X2, blocker.Y2)
 		distToWall := math.Hypot(cpx-e.X, cpy-e.Y)
@@ -549,25 +570,51 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 			return
 		}
 		step := math.Min(distToWall-e.MeleeRange, e.MoveSpeed)
-		if step <= 0 {
+		if step > 0 {
+			moveTowardPoint(cpx, cpy, step)
+			e.Intent = "approaching wall"
 			return
 		}
-		moveTo(cpx, cpy, step)
-		e.Intent = "approaching wall"
-		return
 	}
+	e.Intent = "blocked"
+}
 
-	if dist <= e.MeleeRange {
-		apply(e.AttackPower, runes.Physical)
-		e.Intent = "attacked"
-		return
+// hasLOS reports whether a straight segment from (x1,y1) to (x2,y2) crosses
+// any standing wall. Used as a melee-line-of-sight check.
+func (c *Combat) hasLOS(x1, y1, x2, y2 float64) bool {
+	w, _, _ := c.firstWallHit(x1, y1, x2, y2)
+	return w == nil
+}
+
+// smoothPathStep walks the path from (sx,sy) and returns the world target the
+// enemy should head toward this turn — the farthest waypoint within both
+// line-of-sight and a generous step lookahead. Produces straighter motion
+// than naively chasing the next waypoint.
+func (c *Combat) smoothPathStep(sx, sy float64, path []cellPos, step float64) (float64, float64) {
+	// Skip the source cell if present.
+	startIdx := 0
+	if len(path) > 0 {
+		px, py := cellToWorld(path[0].X, path[0].Y)
+		if math.Hypot(sx-px, sy-py) < cellSize {
+			startIdx = 1
+		}
 	}
-	step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
-	if step <= 0 {
-		return
+	if startIdx >= len(path) {
+		return sx, sy
 	}
-	moveTo(t.x, t.y, step)
-	e.Intent = "approached"
+	bestX, bestY := cellToWorld(path[startIdx].X, path[startIdx].Y)
+	for i := startIdx + 1; i < len(path); i++ {
+		wx, wy := cellToWorld(path[i].X, path[i].Y)
+		if !c.hasLOS(sx, sy, wx, wy) {
+			break
+		}
+		bestX, bestY = wx, wy
+		// Don't bother looking past one step worth of distance.
+		if math.Hypot(wx-sx, wy-sy) > step*1.5 {
+			break
+		}
+	}
+	return bestX, bestY
 }
 
 // refreshIntents previews each enemy's next action for UI display.
@@ -591,7 +638,14 @@ func (c *Combat) refreshIntents() {
 			e.Intent = fmt.Sprintf("cast %s%s (%d)", e.RangedType, suffix, e.RangedPower)
 			continue
 		}
-		// Melee: account for walls between enemy and target.
+		if dist <= e.MeleeRange && c.hasLOS(e.X, e.Y, t.x, t.y) {
+			e.Intent = fmt.Sprintf("attack%s (%d)", suffix, e.AttackPower)
+			continue
+		}
+		if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
+			e.Intent = "approach" + suffix
+			continue
+		}
 		if blocker, _, _ := c.firstWallHit(e.X, e.Y, t.x, t.y); blocker != nil {
 			cpx, cpy := closestPointOnSegment(e.X, e.Y, blocker.X1, blocker.Y1, blocker.X2, blocker.Y2)
 			if math.Hypot(cpx-e.X, cpy-e.Y) <= e.MeleeRange {
@@ -601,12 +655,7 @@ func (c *Combat) refreshIntents() {
 			}
 			continue
 		}
-		switch {
-		case dist <= e.MeleeRange:
-			e.Intent = fmt.Sprintf("attack%s (%d)", suffix, e.AttackPower)
-		default:
-			e.Intent = "approach" + suffix
-		}
+		e.Intent = "blocked"
 	}
 }
 
@@ -855,9 +904,11 @@ func (c *Combat) PlaceWall(cx, cy float64, length float64, hp int) {
 		X2: cx + px*half, Y2: cy + py*half,
 		HP: hp, MaxHP: hp,
 	})
+	c.markGridDirty()
 }
 
 func (c *Combat) compactWalls() {
+	before := len(c.Walls)
 	out := c.Walls[:0]
 	for _, w := range c.Walls {
 		if w.HP > 0 {
@@ -865,6 +916,9 @@ func (c *Combat) compactWalls() {
 		}
 	}
 	c.Walls = out
+	if len(c.Walls) != before {
+		c.markGridDirty()
+	}
 }
 
 // --- Mesmer: rune copy ---
