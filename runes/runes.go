@@ -8,6 +8,19 @@ const (
 	Physical
 )
 
+func (t DamageType) String() string {
+	switch t {
+	case Fire:
+		return "fire"
+	case Frost:
+		return "frost"
+	case Physical:
+		return "physical"
+	default:
+		return "?"
+	}
+}
+
 type Class int
 
 const (
@@ -43,12 +56,15 @@ type World interface {
 	DelayNearest(turns int)
 	DelayAll(turns int)
 	SummonMinion(power, hp int)
+	SummonMinionAt(power, hp int, x, y float64)
 	DrainNearest(amount int)
 	SacrificeNearestMinion(consumeHP, dmg int)
 	HasMinion() bool
 	HealPlayer(amount int)
 	LoseHP(amount int)
 	AddEnergy(amount int)
+	NearestHasIntentRune() bool
+	CopyNearestIntent()
 }
 
 type Card struct {
@@ -56,7 +72,12 @@ type Card struct {
 	Glyph       string
 	Cost        int
 	Description string
-	Effect      func(World)
+	// Effect is the instant effect; runs immediately on play.
+	Effect func(World)
+	// PlacementEffect is an alternative to Effect: the card requires the
+	// player to choose a target position on the radar before resolving.
+	// (x, y) are radar coordinates relative to the player.
+	PlacementEffect func(World, float64, float64)
 	// CanPlay returns whether the card may be played right now and, if not,
 	// a short reason for the UI. nil means always playable (subject to energy).
 	CanPlay func(World) (bool, string)
@@ -165,11 +186,11 @@ func IsaPassive() Card {
 
 func Thurisaz() Card {
 	return Card{
-		Name:        "Thurisaz",
-		Glyph:       "ᚦ",
-		Cost:        2,
-		Description: "Summon a minion: deals 3 damage / turn (8 HP).",
-		Effect:      func(w World) { w.SummonMinion(3, 8) },
+		Name:            "Thurisaz",
+		Glyph:           "ᚦ",
+		Cost:            2,
+		Description:     "Summon a minion at a chosen location: 3 damage / turn (8 HP).",
+		PlacementEffect: func(w World, x, y float64) { w.SummonMinionAt(3, 8, x, y) },
 	}
 }
 
@@ -305,11 +326,11 @@ func ColdIsa() Card {
 
 func GreaterThurisaz() Card {
 	return Card{
-		Name:        "Greater Thurisaz",
-		Glyph:       "ᚦ+",
-		Cost:        2,
-		Description: "Summon a stronger minion: deals 5 damage / turn (12 HP).",
-		Effect:      func(w World) { w.SummonMinion(5, 12) },
+		Name:            "Greater Thurisaz",
+		Glyph:           "ᚦ+",
+		Cost:            2,
+		Description:     "Summon a stronger minion at a chosen location: 5 damage / turn (12 HP).",
+		PlacementEffect: func(w World, x, y float64) { w.SummonMinionAt(5, 12, x, y) },
 	}
 }
 
@@ -318,10 +339,26 @@ func Reanimate() Card {
 		Name:        "Reanimate",
 		Glyph:       "ᚢ",
 		Cost:        2,
-		Description: "Summon two weak minions: 2 damage / turn each (4 HP).",
-		Effect: func(w World) {
-			w.SummonMinion(2, 4)
-			w.SummonMinion(2, 4)
+		Description: "Summon two weak minions at a chosen location: 2 damage / turn each (4 HP).",
+		PlacementEffect: func(w World, x, y float64) {
+			w.SummonMinionAt(2, 4, x, y)
+			w.SummonMinionAt(2, 4, x+15, y)
+		},
+	}
+}
+
+func Mimic() Card {
+	return Card{
+		Name:        "Mimic",
+		Glyph:       "↻",
+		Cost:        1,
+		Description: "Copy the nearest enemy's intended rune into your hand.",
+		Effect:      func(w World) { w.CopyNearestIntent() },
+		CanPlay: func(w World) (bool, string) {
+			if !w.NearestHasIntentRune() {
+				return false, "nearest has no rune to copy"
+			}
+			return true, ""
 		},
 	}
 }
@@ -367,11 +404,11 @@ func RewardPool(c Class) []Card {
 	switch c {
 	case ClassMesmer:
 		return []Card{
-			GreaterAphyr(),
-			MassDelay(),
+			AphyrDelay(),
 			SharpIsa(),
 			ColdIsa(),
 			Sprint(),
+			Mimic(),
 		}
 	case ClassNecromancer:
 		return []Card{
@@ -420,13 +457,10 @@ func necromancerStarter() []Card {
 
 func mesmerStarter() []Card {
 	deck := make([]Card, 0, 10)
-	for i := 0; i < 2; i++ {
-		deck = append(deck, AphyrDelay())
-	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		deck = append(deck, IsaAggressive())
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		deck = append(deck, IsaPassive())
 	}
 	for i := 0; i < 2; i++ {

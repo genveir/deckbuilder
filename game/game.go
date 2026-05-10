@@ -45,6 +45,23 @@ func (g *Game) handleCombatInput() {
 	if c.Phase != combat.PhasePlayer {
 		return
 	}
+
+	// While placing, mouse input is hijacked: left-click on radar confirms,
+	// right-click anywhere (or Escape) cancels.
+	if c.PendingCardIdx >= 0 {
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			mx, my := ebiten.CursorPosition()
+			if rx, ry, ok := ui.HitRadar(mx, my); ok {
+				c.ConfirmPlacement(rx, ry)
+			}
+		}
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) ||
+			inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+			c.CancelPlacement()
+		}
+		return
+	}
+
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		mx, my := ebiten.CursorPosition()
 		if i := ui.HitCard(c, mx, my); i >= 0 {

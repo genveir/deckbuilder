@@ -61,9 +61,13 @@ type Combat struct {
 
 	Popups []DamagePopup
 
+	// PendingCardIdx is the hand index of a card awaiting placement target.
+	// -1 when no card is pending. While >= 0, other input is blocked.
+	PendingCardIdx int
+
 	// Enemy turn animation state
-	enemyIndex   int
-	enemyTimer  float64
+	enemyIndex int
+	enemyTimer float64
 
 	rng *rand.Rand
 }
@@ -72,12 +76,13 @@ func New(seed int64, hp, maxHP int, deck []runes.Card, foes []*enemies.Enemy) *C
 	deckCopy := make([]runes.Card, len(deck))
 	copy(deckCopy, deck)
 	c := &Combat{
-		PlayerHP:    hp,
-		PlayerMaxHP: maxHP,
-		Enemies:     foes,
-		Draw:        deckCopy,
-		Phase:       PhasePlayer,
-		rng:         rand.New(rand.NewSource(seed)),
+		PlayerHP:       hp,
+		PlayerMaxHP:    maxHP,
+		Enemies:        foes,
+		Draw:           deckCopy,
+		Phase:          PhasePlayer,
+		PendingCardIdx: -1,
+		rng:            rand.New(rand.NewSource(seed)),
 	}
 	c.shuffle(c.Draw)
 	c.startPlayerTurn()
@@ -164,19 +169,26 @@ func (c *Combat) drawUpTo(n int) {
 	}
 }
 
-// PlayCard plays the card at hand index i. Returns true if played.
-func (c *Combat) PlayCard(i int) bool {
-	if c.Phase != PhasePlayer || i < 0 || i >= len(c.Hand) {
-		return false
+// PlayCard plays the card at hand index i. If the card requires placement,
+// the card is held pending (PendingCardIdx is set) and (true, true) is returned;
+// the caller must drive ConfirmPlacement / CancelPlacement next. Otherwise the
+// effect runs immediately.
+func (c *Combat) PlayCard(i int) (played, needsPlacement bool) {
+	if c.Phase != PhasePlayer || c.PendingCardIdx >= 0 || i < 0 || i >= len(c.Hand) {
+		return false, false
 	}
 	card := c.Hand[i]
 	if card.Cost > c.Energy {
-		return false
+		return false, false
 	}
 	if card.CanPlay != nil {
 		if ok, _ := card.CanPlay(c); !ok {
-			return false
+			return false, false
 		}
+	}
+	if card.PlacementEffect != nil {
+		c.PendingCardIdx = i
+		return true, true
 	}
 	c.Energy -= card.Cost
 	card.Effect(c)
@@ -184,8 +196,28 @@ func (c *Combat) PlayCard(i int) bool {
 	c.Discard = append(c.Discard, card)
 	c.refreshIntents()
 	c.checkVictory()
+	return true, false
+}
+
+// ConfirmPlacement resolves the pending card with the chosen radar target.
+func (c *Combat) ConfirmPlacement(x, y float64) bool {
+	if c.PendingCardIdx < 0 || c.PendingCardIdx >= len(c.Hand) {
+		c.PendingCardIdx = -1
+		return false
+	}
+	i := c.PendingCardIdx
+	card := c.Hand[i]
+	c.Energy -= card.Cost
+	card.PlacementEffect(c, x, y)
+	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
+	c.Discard = append(c.Discard, card)
+	c.PendingCardIdx = -1
+	c.refreshIntents()
+	c.checkVictory()
 	return true
 }
+
+func (c *Combat) CancelPlacement() { c.PendingCardIdx = -1 }
 
 // MoveTowards moves the player toward the given world target, consuming
 // movement budget. Player is always at (0,0), so this just shifts all enemy
@@ -294,14 +326,14 @@ func (c *Combat) chooseTarget(e *enemies.Enemy) aggroTarget {
 func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	t := c.chooseTarget(e)
 	dist := math.Hypot(e.X-t.x, e.Y-t.y)
-	apply := func(dmg int) {
+	apply := func(dmg int, dt runes.DamageType) {
 		if t.isMinion() {
 			t.minion.HP -= dmg
 			if t.minion.HP < 0 {
 				t.minion.HP = 0
 			}
 			c.Popups = append(c.Popups, DamagePopup{
-				X: t.x, Y: t.y, Amount: dmg, Type: runes.Physical,
+				X: t.x, Y: t.y, Amount: dmg, Type: dt,
 			})
 			return
 		}
@@ -319,7 +351,7 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	}
 
 	if e.RangedPower > 0 {
-		apply(e.RangedPower)
+		apply(e.RangedPower, e.RangedType)
 		e.Intent = "cast"
 		if dist > e.MeleeRange {
 			step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
@@ -330,7 +362,7 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 		return
 	}
 	if dist <= e.MeleeRange {
-		apply(e.AttackPower)
+		apply(e.AttackPower, runes.Physical)
 		e.Intent = "attacked"
 		return
 	}
@@ -361,7 +393,7 @@ func (c *Combat) refreshIntents() {
 		}
 		switch {
 		case e.RangedPower > 0:
-			e.Intent = fmt.Sprintf("cast%s (%d)", suffix, e.RangedPower)
+			e.Intent = fmt.Sprintf("cast %s%s (%d)", e.RangedType, suffix, e.RangedPower)
 		case dist <= e.MeleeRange:
 			e.Intent = fmt.Sprintf("attack%s (%d)", suffix, e.AttackPower)
 		default:
@@ -537,6 +569,10 @@ func (c *Combat) SummonMinion(power, hp int) {
 			y = t.Y / d * 50
 		}
 	}
+	c.SummonMinionAt(power, hp, x, y)
+}
+
+func (c *Combat) SummonMinionAt(power, hp int, x, y float64) {
 	c.Minions = append(c.Minions, &Minion{
 		HP: hp, MaxHP: hp,
 		X: x, Y: y,
@@ -599,3 +635,74 @@ func (c *Combat) LoseHP(amount int) {
 }
 
 func (c *Combat) AddEnergy(amount int) { c.Energy += amount }
+
+// --- Mesmer: rune copy ---
+
+// buildIntentRune produces a one-shot Card representing the enemy's next
+// damaging action, or false if there's nothing to copy (e.g. approach).
+func (c *Combat) buildIntentRune(e *enemies.Enemy) (runes.Card, bool) {
+	if e == nil || e.HP <= 0 || e.Stunned > 0 {
+		return runes.Card{}, false
+	}
+	t := c.chooseTarget(e)
+	dist := math.Hypot(e.X-t.x, e.Y-t.y)
+	if e.RangedPower > 0 {
+		power := e.RangedPower
+		dt := e.RangedType
+		return runes.Card{
+			Name:        fmt.Sprintf("Mimic: %s Cast", e.RangedType),
+			Glyph:       "↻",
+			Cost:        1,
+			Description: fmt.Sprintf("Deal %d %s damage to the nearest enemy.", power, dt),
+			Effect:      func(w runes.World) { w.DamageNearest(power, dt) },
+		}, true
+	}
+	if dist <= e.MeleeRange {
+		power := e.AttackPower
+		return runes.Card{
+			Name:        "Mimic: Strike",
+			Glyph:       "↻",
+			Cost:        1,
+			Description: fmt.Sprintf("Deal %d damage to the nearest enemy.", power),
+			Effect:      func(w runes.World) { w.DamageNearest(power, runes.Physical) },
+		}, true
+	}
+	return runes.Card{}, false
+}
+
+func (c *Combat) NearestHasIntentRune() bool {
+	target := c.nearestNonStunned()
+	if target == nil {
+		return false
+	}
+	_, ok := c.buildIntentRune(target)
+	return ok
+}
+
+func (c *Combat) CopyNearestIntent() {
+	target := c.nearestNonStunned()
+	if target == nil {
+		return
+	}
+	card, ok := c.buildIntentRune(target)
+	if !ok {
+		return
+	}
+	c.Hand = append(c.Hand, card)
+}
+
+func (c *Combat) nearestNonStunned() *enemies.Enemy {
+	var target *enemies.Enemy
+	best := math.Inf(1)
+	for _, e := range c.Enemies {
+		if e.HP <= 0 || e.Stunned > 0 {
+			continue
+		}
+		d := math.Hypot(e.X, e.Y)
+		if d < best {
+			best = d
+			target = e
+		}
+	}
+	return target
+}

@@ -118,11 +118,28 @@ func drawCombatScreen(screen *ebiten.Image, v RunView) {
 	c := v.Combat
 	drawRadar(screen, c)
 	drawPopups(screen, c)
+	drawPlacementPreview(screen, c)
 	drawHand(screen, c)
 	drawHUD(screen, v)
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
+}
+
+func drawPlacementPreview(screen *ebiten.Image, c *combat.Combat) {
+	if c.PendingCardIdx < 0 || c.PendingCardIdx >= len(c.Hand) {
+		return
+	}
+	card := c.Hand[c.PendingCardIdx]
+	mx, my := ebiten.CursorPosition()
+	if rx, ry, ok := HitRadar(mx, my); ok {
+		gx := float32(RadarCX + rx)
+		gy := float32(RadarCY + ry)
+		vector.StrokeCircle(screen, gx, gy, 8, 2, minionCol, true)
+		vector.StrokeLine(screen, RadarCX, RadarCY, gx, gy, 1, minionCol, true)
+	}
+	banner := fmt.Sprintf("Placing: %s — left-click radar to confirm, right-click to cancel", card.Name)
+	ebitenutil.DebugPrintAt(screen, banner, 40, 30)
 }
 
 // drawColoredText renders text via DebugPrint into an offscreen image and
@@ -243,7 +260,9 @@ func drawHand(screen *ebiten.Image, c *combat.Combat) {
 		x, y := cardRect(i)
 		playable, _ := cardPlayable(c, card)
 		bg := cardBg
-		if !playable {
+		if i == c.PendingCardIdx {
+			bg = cardBgHi
+		} else if !playable {
 			bg = cardBgDim
 		} else if mx >= x && mx < x+CardW && my >= y && my < y+CardH {
 			bg = cardBgHi
