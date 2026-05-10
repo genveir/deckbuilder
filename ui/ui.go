@@ -48,16 +48,67 @@ var (
 	moveRingCol  = color.RGBA{120, 220, 140, 90}
 	tooltipBg    = color.RGBA{20, 20, 32, 240}
 	tooltipEdge  = color.RGBA{120, 130, 170, 255}
+
+	fireCol     = color.RGBA{255, 150, 70, 255}
+	frostCol    = color.RGBA{120, 200, 255, 255}
+	physicalCol = color.RGBA{230, 230, 230, 255}
 )
+
+func damageTypeColor(t runes.DamageType) color.RGBA {
+	switch t {
+	case runes.Fire:
+		return fireCol
+	case runes.Frost:
+		return frostCol
+	default:
+		return physicalCol
+	}
+}
 
 func Draw(screen *ebiten.Image, c *combat.Combat) {
 	screen.Fill(bgColor)
 	drawRadar(screen, c)
+	drawPopups(screen, c)
 	drawHand(screen, c)
 	drawHUD(screen, c)
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
+}
+
+// drawColoredText renders text via DebugPrint into an offscreen image and
+// composites it with a color scale. Allocates per call; fine for small,
+// short-lived bits of text like damage popups.
+func drawColoredText(screen *ebiten.Image, s string, x, y int, c color.RGBA, alpha float32) {
+	w := len(s)*7 + 4
+	if w < 8 {
+		w = 8
+	}
+	img := ebiten.NewImage(w, 16)
+	ebitenutil.DebugPrint(img, s)
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(float64(x), float64(y))
+	op.ColorScale.Scale(
+		float32(c.R)/255*alpha,
+		float32(c.G)/255*alpha,
+		float32(c.B)/255*alpha,
+		alpha,
+	)
+	screen.DrawImage(img, op)
+}
+
+func drawPopups(screen *ebiten.Image, c *combat.Combat) {
+	for _, p := range c.Popups {
+		t := p.Age / combat.PopupLife
+		if t > 1 {
+			continue
+		}
+		alpha := float32(1.0 - t*t) // ease-out fade
+		dy := -float64(40) * t
+		x := int(RadarCX + p.X)
+		y := int(RadarCY + p.Y + dy - 10)
+		drawColoredText(screen, fmt.Sprintf("%d", p.Amount), x-6, y, damageTypeColor(p.Type), alpha)
+	}
 }
 
 func drawRadar(screen *ebiten.Image, c *combat.Combat) {

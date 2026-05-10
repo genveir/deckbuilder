@@ -25,6 +25,17 @@ const (
 	PhaseLost
 )
 
+// DamagePopup is a short-lived floating number anchored in radar coordinates
+// (player-relative). UI reads these directly.
+type DamagePopup struct {
+	X, Y   float64
+	Amount int
+	Type   runes.DamageType
+	Age    float64 // seconds
+}
+
+const PopupLife = 1.1
+
 type Combat struct {
 	PlayerHP, PlayerMaxHP int
 	PlayerArmor           int
@@ -37,6 +48,8 @@ type Combat struct {
 	MovementBudget float64 // remaining movement this turn
 	hasMoved       bool
 	Phase          Phase
+
+	Popups []DamagePopup
 
 	// Enemy turn animation state
 	enemyIndex   int
@@ -132,6 +145,10 @@ func (c *Combat) MoveTowards(tx, ty float64) float64 {
 		e.X -= dx
 		e.Y -= dy
 	}
+	for i := range c.Popups {
+		c.Popups[i].X -= dx
+		c.Popups[i].Y -= dy
+	}
 	c.MovementBudget -= step
 	c.hasMoved = true
 	return step
@@ -150,6 +167,7 @@ func (c *Combat) EndTurn() {
 
 // Update advances the enemy phase animation. dt is seconds.
 func (c *Combat) Update(dt float64) {
+	c.advancePopups(dt)
 	if c.Phase != PhaseEnemy {
 		return
 	}
@@ -247,10 +265,31 @@ func (c *Combat) DamageNearest(amount int, dt runes.DamageType) {
 	if target == nil {
 		return
 	}
-	target.HP -= amount
+	dealt := amount
+	if target.Weakness == dt {
+		dealt = (amount*3 + 1) / 2 // 1.5x rounded
+	}
+	target.HP -= dealt
 	if target.HP < 0 {
 		target.HP = 0
 	}
+	c.Popups = append(c.Popups, DamagePopup{
+		X: target.X, Y: target.Y, Amount: dealt, Type: dt,
+	})
+}
+
+func (c *Combat) advancePopups(dt float64) {
+	if len(c.Popups) == 0 {
+		return
+	}
+	out := c.Popups[:0]
+	for _, p := range c.Popups {
+		p.Age += dt
+		if p.Age < PopupLife {
+			out = append(out, p)
+		}
+	}
+	c.Popups = out
 }
 
 func (c *Combat) GainArmor(amount int) { c.PlayerArmor += amount }

@@ -1,5 +1,7 @@
 package enemies
 
+import "deckbuilder/runes"
+
 type Enemy struct {
 	Name        string
 	HP, MaxHP   int
@@ -7,7 +9,8 @@ type Enemy struct {
 	MeleeRange  float64
 	MoveSpeed   float64
 	AttackPower int
-	Intent      string // human-readable next action
+	Weakness    runes.DamageType // hidden from the player
+	Intent      string           // human-readable next action
 }
 
 func NewGoblin(x, y float64) *Enemy {
@@ -18,6 +21,7 @@ func NewGoblin(x, y float64) *Enemy {
 		MeleeRange:  40,
 		MoveSpeed:   60,
 		AttackPower: 6,
+		Weakness:    runes.Frost,
 	}
 }
 
@@ -29,5 +33,6 @@ func NewWraith(x, y float64) *Enemy {
 		MeleeRange:  35,
 		MoveSpeed:   45,
 		AttackPower: 8,
+		Weakness:    runes.Fire,
 	}
 }
