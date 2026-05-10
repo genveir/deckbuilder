@@ -11,7 +11,7 @@ import (
 const (
 	StartingEnergy   = 3
 	HandSize         = 5
-	BaseMovement     = 100
+	BaseMovement     = 30
 	PlayerMaxHP      = 70
 	EnemyTurnStepDur = 0.4 // seconds per enemy action
 )
@@ -35,6 +35,7 @@ type Combat struct {
 	Draw, Hand, Discard []runes.Card
 
 	MovementBudget float64 // remaining movement this turn
+	hasMoved       bool
 	Phase          Phase
 
 	// Enemy turn animation state
@@ -70,6 +71,7 @@ func (c *Combat) startPlayerTurn() {
 	c.MaxEnergy = StartingEnergy
 	c.PlayerArmor = 0
 	c.MovementBudget = BaseMovement
+	c.hasMoved = false
 	c.refreshIntents()
 	c.drawUpTo(HandSize)
 	c.Phase = PhasePlayer
@@ -99,6 +101,11 @@ func (c *Combat) PlayCard(i int) bool {
 	if card.Cost > c.Energy {
 		return false
 	}
+	if card.CanPlay != nil {
+		if ok, _ := card.CanPlay(c); !ok {
+			return false
+		}
+	}
 	c.Energy -= card.Cost
 	card.Effect(c)
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
@@ -126,6 +133,7 @@ func (c *Combat) MoveTowards(tx, ty float64) float64 {
 		e.Y -= dy
 	}
 	c.MovementBudget -= step
+	c.hasMoved = true
 	return step
 }
 
@@ -248,3 +256,7 @@ func (c *Combat) DamageNearest(amount int, dt runes.DamageType) {
 func (c *Combat) GainArmor(amount int) { c.PlayerArmor += amount }
 
 func (c *Combat) GrantMovement(extra float64) { c.MovementBudget += extra }
+
+func (c *Combat) HasMoved() bool { return c.hasMoved }
+
+func (c *Combat) ConsumeAllMovement() { c.MovementBudget = 0 }

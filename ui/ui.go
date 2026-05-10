@@ -10,6 +10,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"deckbuilder/combat"
+	"deckbuilder/runes"
 )
 
 const (
@@ -45,6 +46,8 @@ var (
 	moveOkCol    = color.RGBA{120, 220, 140, 220}
 	moveOverCol  = color.RGBA{230, 160, 90, 220}
 	moveRingCol  = color.RGBA{120, 220, 140, 90}
+	tooltipBg    = color.RGBA{20, 20, 32, 240}
+	tooltipEdge  = color.RGBA{120, 130, 170, 255}
 )
 
 func Draw(screen *ebiten.Image, c *combat.Combat) {
@@ -53,6 +56,7 @@ func Draw(screen *ebiten.Image, c *combat.Combat) {
 	drawHand(screen, c)
 	drawHUD(screen, c)
 	drawEndTurn(screen, c)
+	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
 }
 
@@ -126,8 +130,9 @@ func drawHand(screen *ebiten.Image, c *combat.Combat) {
 	mx, my := ebiten.CursorPosition()
 	for i, card := range c.Hand {
 		x, y := cardRect(i)
+		playable, _ := cardPlayable(c, card)
 		bg := cardBg
-		if card.Cost > c.Energy {
+		if !playable {
 			bg = cardBgDim
 		} else if mx >= x && mx < x+CardW && my >= y && my < y+CardH {
 			bg = cardBgHi
@@ -141,6 +146,20 @@ func drawHand(screen *ebiten.Image, c *combat.Combat) {
 
 func cardRect(i int) (int, int) {
 	return CardStartX + i*(CardW+CardGap), HandY
+}
+
+// cardPlayable evaluates both energy and CanPlay constraints. Returns
+// playable + a short reason if not.
+func cardPlayable(c *combat.Combat, card runes.Card) (bool, string) {
+	if card.Cost > c.Energy {
+		return false, "not enough energy"
+	}
+	if card.CanPlay != nil {
+		if ok, why := card.CanPlay(c); !ok {
+			return false, why
+		}
+	}
+	return true, ""
 }
 
 // HitCard returns the index of the card at (mx,my), or -1.
@@ -167,6 +186,39 @@ func HitRadar(mx, my int) (rx, ry float64, ok bool) {
 func HitEndTurn(mx, my int) bool {
 	return mx >= EndTurnX && mx < EndTurnX+EndTurnW &&
 		my >= EndTurnY && my < EndTurnY+EndTurnH
+}
+
+func drawCardTooltip(screen *ebiten.Image, c *combat.Combat) {
+	mx, my := ebiten.CursorPosition()
+	i := HitCard(c, mx, my)
+	if i < 0 {
+		return
+	}
+	card := c.Hand[i]
+	cx, cy := cardRect(i)
+
+	const (
+		tipW = 240
+		tipH = 60
+		pad  = 8
+	)
+	tx := cx + (CardW-tipW)/2
+	if tx < 4 {
+		tx = 4
+	}
+	if tx+tipW > ScreenW-4 {
+		tx = ScreenW - 4 - tipW
+	}
+	ty := cy - tipH - 8
+
+	vector.DrawFilledRect(screen, float32(tx), float32(ty), tipW, tipH, tooltipBg, true)
+	vector.StrokeRect(screen, float32(tx), float32(ty), tipW, tipH, 1, tooltipEdge, true)
+	header := fmt.Sprintf("%s %s   (cost %d)", card.Glyph, card.Name, card.Cost)
+	ebitenutil.DebugPrintAt(screen, header, tx+pad, ty+pad)
+	ebitenutil.DebugPrintAt(screen, card.Description, tx+pad, ty+pad+20)
+	if ok, why := cardPlayable(c, card); !ok {
+		ebitenutil.DebugPrintAt(screen, "("+why+")", tx+pad, ty+pad+36)
+	}
 }
 
 func drawHUD(screen *ebiten.Image, c *combat.Combat) {
