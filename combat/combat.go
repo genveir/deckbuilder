@@ -1,0 +1,250 @@
+package combat
+
+import (
+	"math"
+	"math/rand"
+
+	"deckbuilder/enemies"
+	"deckbuilder/runes"
+)
+
+const (
+	StartingEnergy   = 3
+	HandSize         = 5
+	BaseMovement     = 100
+	PlayerMaxHP      = 70
+	EnemyTurnStepDur = 0.4 // seconds per enemy action
+)
+
+type Phase int
+
+const (
+	PhasePlayer Phase = iota
+	PhaseEnemy
+	PhaseWon
+	PhaseLost
+)
+
+type Combat struct {
+	PlayerHP, PlayerMaxHP int
+	PlayerArmor           int
+	Energy, MaxEnergy     int
+
+	Enemies []*enemies.Enemy
+
+	Draw, Hand, Discard []runes.Card
+
+	MovementBudget float64 // remaining movement this turn
+	Phase          Phase
+
+	// Enemy turn animation state
+	enemyIndex   int
+	enemyTimer  float64
+
+	rng *rand.Rand
+}
+
+func New(seed int64) *Combat {
+	c := &Combat{
+		PlayerHP:    PlayerMaxHP,
+		PlayerMaxHP: PlayerMaxHP,
+		Enemies: []*enemies.Enemy{
+			enemies.NewGoblin(140, -60),
+			enemies.NewWraith(-110, 100),
+		},
+		Draw:  runes.ElementalistStarter(),
+		Phase: PhasePlayer,
+		rng:   rand.New(rand.NewSource(seed)),
+	}
+	c.shuffle(c.Draw)
+	c.startPlayerTurn()
+	return c
+}
+
+func (c *Combat) shuffle(cards []runes.Card) {
+	c.rng.Shuffle(len(cards), func(i, j int) { cards[i], cards[j] = cards[j], cards[i] })
+}
+
+func (c *Combat) startPlayerTurn() {
+	c.Energy = StartingEnergy
+	c.MaxEnergy = StartingEnergy
+	c.PlayerArmor = 0
+	c.MovementBudget = BaseMovement
+	c.refreshIntents()
+	c.drawUpTo(HandSize)
+	c.Phase = PhasePlayer
+}
+
+func (c *Combat) drawUpTo(n int) {
+	for len(c.Hand) < n {
+		if len(c.Draw) == 0 {
+			if len(c.Discard) == 0 {
+				return
+			}
+			c.Draw = append(c.Draw, c.Discard...)
+			c.Discard = c.Discard[:0]
+			c.shuffle(c.Draw)
+		}
+		c.Hand = append(c.Hand, c.Draw[0])
+		c.Draw = c.Draw[1:]
+	}
+}
+
+// PlayCard plays the card at hand index i. Returns true if played.
+func (c *Combat) PlayCard(i int) bool {
+	if c.Phase != PhasePlayer || i < 0 || i >= len(c.Hand) {
+		return false
+	}
+	card := c.Hand[i]
+	if card.Cost > c.Energy {
+		return false
+	}
+	c.Energy -= card.Cost
+	card.Effect(c)
+	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
+	c.Discard = append(c.Discard, card)
+	c.checkVictory()
+	return true
+}
+
+// MoveTowards moves the player toward the given world target, consuming
+// movement budget. Player is always at (0,0), so this just shifts all enemy
+// positions by -delta. Returns the actual distance moved.
+func (c *Combat) MoveTowards(tx, ty float64) float64 {
+	if c.Phase != PhasePlayer || c.MovementBudget <= 0 {
+		return 0
+	}
+	dist := math.Hypot(tx, ty)
+	if dist == 0 {
+		return 0
+	}
+	step := math.Min(dist, c.MovementBudget)
+	dx := tx / dist * step
+	dy := ty / dist * step
+	for _, e := range c.Enemies {
+		e.X -= dx
+		e.Y -= dy
+	}
+	c.MovementBudget -= step
+	return step
+}
+
+func (c *Combat) EndTurn() {
+	if c.Phase != PhasePlayer {
+		return
+	}
+	c.Discard = append(c.Discard, c.Hand...)
+	c.Hand = c.Hand[:0]
+	c.Phase = PhaseEnemy
+	c.enemyIndex = 0
+	c.enemyTimer = 0
+}
+
+// Update advances the enemy phase animation. dt is seconds.
+func (c *Combat) Update(dt float64) {
+	if c.Phase != PhaseEnemy {
+		return
+	}
+	c.enemyTimer += dt
+	if c.enemyTimer < EnemyTurnStepDur {
+		return
+	}
+	c.enemyTimer = 0
+	for c.enemyIndex < len(c.Enemies) {
+		e := c.Enemies[c.enemyIndex]
+		c.enemyIndex++
+		if e.HP <= 0 {
+			continue
+		}
+		c.runEnemyProgram(e)
+		if c.PlayerHP <= 0 {
+			c.Phase = PhaseLost
+			return
+		}
+		return // one enemy per tick
+	}
+	c.startPlayerTurn()
+	c.checkVictory()
+}
+
+// Default enemy program (design §8): if in melee range, attack; else move closer.
+func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
+	dist := math.Hypot(e.X, e.Y)
+	if dist <= e.MeleeRange {
+		c.applyDamageToPlayer(e.AttackPower)
+		e.Intent = "attacked"
+		return
+	}
+	step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
+	if step <= 0 {
+		return
+	}
+	e.X -= e.X / dist * step
+	e.Y -= e.Y / dist * step
+	e.Intent = "approached"
+}
+
+// refreshIntents previews each enemy's next action for UI display.
+func (c *Combat) refreshIntents() {
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			e.Intent = ""
+			continue
+		}
+		if math.Hypot(e.X, e.Y) <= e.MeleeRange {
+			e.Intent = "attack"
+		} else {
+			e.Intent = "approach"
+		}
+	}
+}
+
+func (c *Combat) applyDamageToPlayer(amount int) {
+	if c.PlayerArmor >= amount {
+		c.PlayerArmor -= amount
+		return
+	}
+	amount -= c.PlayerArmor
+	c.PlayerArmor = 0
+	c.PlayerHP -= amount
+	if c.PlayerHP < 0 {
+		c.PlayerHP = 0
+	}
+}
+
+func (c *Combat) checkVictory() {
+	for _, e := range c.Enemies {
+		if e.HP > 0 {
+			return
+		}
+	}
+	c.Phase = PhaseWon
+}
+
+// --- runes.World implementation ---
+
+func (c *Combat) DamageNearest(amount int, dt runes.DamageType) {
+	var target *enemies.Enemy
+	best := math.Inf(1)
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		d := math.Hypot(e.X, e.Y)
+		if d < best {
+			best = d
+			target = e
+		}
+	}
+	if target == nil {
+		return
+	}
+	target.HP -= amount
+	if target.HP < 0 {
+		target.HP = 0
+	}
+}
+
+func (c *Combat) GainArmor(amount int) { c.PlayerArmor += amount }
+
+func (c *Combat) GrantMovement(extra float64) { c.MovementBudget += extra }
