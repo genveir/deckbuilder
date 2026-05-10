@@ -41,6 +41,7 @@ const (
 // the UI depending on the game package.
 type RunView struct {
 	Phase           int
+	Class           runes.Class
 	Combat          *combat.Combat
 	Rewards         []runes.Card
 	EncounterIdx    int
@@ -51,10 +52,11 @@ type RunView struct {
 
 // Run phase constants kept in sync with game.RunPhase.
 const (
-	phaseInCombat = 0
-	phaseReward   = 1
-	phaseRunWon   = 2
-	phaseRunLost  = 3
+	phaseSelectClass = 0
+	phaseInCombat    = 1
+	phaseReward      = 2
+	phaseRunWon      = 3
+	phaseRunLost     = 4
 )
 
 var (
@@ -95,6 +97,8 @@ func damageTypeColor(t runes.DamageType) color.RGBA {
 func DrawRun(screen *ebiten.Image, v RunView) {
 	screen.Fill(bgColor)
 	switch v.Phase {
+	case phaseSelectClass:
+		drawClassSelect(screen)
 	case phaseInCombat:
 		drawCombatScreen(screen, v)
 	case phaseReward:
@@ -319,6 +323,7 @@ func drawCardTooltip(screen *ebiten.Image, c *combat.Combat) {
 func drawHUD(screen *ebiten.Image, v RunView) {
 	c := v.Combat
 	lines := []string{
+		fmt.Sprintf("Class: %s", v.Class),
 		fmt.Sprintf("Encounter %d / %d", v.EncounterIdx+1, v.TotalEncounters),
 		fmt.Sprintf("HP: %d/%d", c.PlayerHP, c.PlayerMaxHP),
 		fmt.Sprintf("Armor: %d", c.PlayerArmor),
@@ -458,6 +463,92 @@ func HitReward(rewards []runes.Card, mx, my int) int {
 func HitSkipReward(mx, my int) bool {
 	x, y := skipBtnRect()
 	return mx >= x && mx < x+SkipBtnW && my >= y && my < y+SkipBtnH
+}
+
+// --- Class select screen ---
+
+const (
+	classCardW  = 360
+	classCardH  = 380
+	classGap    = 80
+	classTopY   = 200
+)
+
+type classOption struct {
+	class       runes.Class
+	title       string
+	description []string
+}
+
+func classOptions() []classOption {
+	return []classOption{
+		{
+			class: runes.ClassElementalist,
+			title: "Elementalist",
+			description: []string{
+				"Exploits the type system.",
+				"Match damage type to enemy weakness for 1.5x damage.",
+				"",
+				"Defense: Earth Armor (cannot move once cast).",
+				"No mobility runes — stand and burn.",
+				"",
+				"Starter: 4 Fire, 3 Earth Armor, 2 Frost.",
+			},
+		},
+		{
+			class: runes.ClassMesmer,
+			title: "Mesmer",
+			description: []string{
+				"Reads enemy intent. Punishes both",
+				"aggression and passivity.",
+				"",
+				"Defense: positioning and delay.",
+				"Aphyr stalls; Move keeps distance.",
+				"",
+				"Starter: 2 Aphyr, 3 Isa-aggressive,",
+				"3 Isa-passive, 2 Move.",
+			},
+		},
+	}
+}
+
+func classCardRect(i int) (int, int) {
+	opts := classOptions()
+	n := len(opts)
+	totalW := n*classCardW + (n-1)*classGap
+	startX := (ScreenW - totalW) / 2
+	x := startX + i*(classCardW+classGap)
+	return x, classTopY
+}
+
+func drawClassSelect(screen *ebiten.Image) {
+	ebitenutil.DebugPrintAt(screen, "NAND2RUNES — choose your class", ScreenW/2-110, 100)
+
+	mx, my := ebiten.CursorPosition()
+	for i, opt := range classOptions() {
+		x, y := classCardRect(i)
+		bg := cardBg
+		if mx >= x && mx < x+classCardW && my >= y && my < y+classCardH {
+			bg = cardBgHi
+		}
+		vector.DrawFilledRect(screen, float32(x), float32(y), classCardW, classCardH, bg, true)
+		vector.StrokeRect(screen, float32(x), float32(y), classCardW, classCardH, 1, tooltipEdge, true)
+		ebitenutil.DebugPrintAt(screen, opt.title, x+18, y+18)
+		for j, line := range opt.description {
+			ebitenutil.DebugPrintAt(screen, line, x+18, y+60+j*20)
+		}
+	}
+}
+
+// HitClassPick returns the class at (mx, my) if any.
+func HitClassPick(mx, my int) (runes.Class, bool) {
+	for i, opt := range classOptions() {
+		x, y := classCardRect(i)
+		if mx >= x && mx < x+classCardW && my >= y && my < y+classCardH {
+			return opt.class, true
+		}
+	}
+	return 0, false
 }
 
 // --- End-of-run overlay ---

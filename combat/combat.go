@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 
@@ -122,6 +123,7 @@ func (c *Combat) PlayCard(i int) bool {
 	card.Effect(c)
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
 	c.Discard = append(c.Discard, card)
+	c.refreshIntents()
 	c.checkVictory()
 	return true
 }
@@ -181,6 +183,11 @@ func (c *Combat) Update(dt float64) {
 		if e.HP <= 0 {
 			continue
 		}
+		if e.Stunned > 0 {
+			e.Stunned--
+			e.Intent = "delayed"
+			continue
+		}
 		c.runEnemyProgram(e)
 		if c.PlayerHP <= 0 {
 			c.Phase = PhaseLost
@@ -192,9 +199,22 @@ func (c *Combat) Update(dt float64) {
 	c.checkVictory()
 }
 
-// Default enemy program (design §8): if in melee range, attack; else move closer.
+// Default enemy program (design §8). Ranged casters drift forward while
+// chipping the player every turn; pure melee enemies move-or-attack.
 func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	dist := math.Hypot(e.X, e.Y)
+	if e.RangedPower > 0 {
+		c.applyDamageToPlayer(e.RangedPower)
+		e.Intent = "cast"
+		if dist > e.MeleeRange {
+			step := math.Min(dist-e.MeleeRange, e.MoveSpeed)
+			if step > 0 {
+				e.X -= e.X / dist * step
+				e.Y -= e.Y / dist * step
+			}
+		}
+		return
+	}
 	if dist <= e.MeleeRange {
 		c.applyDamageToPlayer(e.AttackPower)
 		e.Intent = "attacked"
@@ -216,12 +236,36 @@ func (c *Combat) refreshIntents() {
 			e.Intent = ""
 			continue
 		}
-		if math.Hypot(e.X, e.Y) <= e.MeleeRange {
-			e.Intent = "attack"
-		} else {
+		if e.Stunned > 0 {
+			e.Intent = "delayed"
+			continue
+		}
+		switch {
+		case e.RangedPower > 0:
+			e.Intent = fmt.Sprintf("cast (%d)", e.RangedPower)
+		case math.Hypot(e.X, e.Y) <= e.MeleeRange:
+			e.Intent = fmt.Sprintf("attack (%d)", e.AttackPower)
+		default:
 			e.Intent = "approach"
 		}
 	}
+}
+
+// nearestLiving returns the nearest enemy with HP > 0, ignoring stunned status.
+func (c *Combat) nearestLiving() *enemies.Enemy {
+	var target *enemies.Enemy
+	best := math.Inf(1)
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		d := math.Hypot(e.X, e.Y)
+		if d < best {
+			best = d
+			target = e
+		}
+	}
+	return target
 }
 
 func (c *Combat) applyDamageToPlayer(amount int) {
@@ -317,3 +361,44 @@ func (c *Combat) GrantMovement(extra float64) { c.MovementBudget += extra }
 func (c *Combat) HasMoved() bool { return c.hasMoved }
 
 func (c *Combat) ConsumeAllMovement() { c.MovementBudget = 0 }
+
+// NearestIntendsAttack returns true if the nearest living, non-stunned enemy
+// will deal damage to the player on its next turn.
+func (c *Combat) NearestIntendsAttack() bool {
+	var target *enemies.Enemy
+	best := math.Inf(1)
+	for _, e := range c.Enemies {
+		if e.HP <= 0 || e.Stunned > 0 {
+			continue
+		}
+		d := math.Hypot(e.X, e.Y)
+		if d < best {
+			best = d
+			target = e
+		}
+	}
+	if target == nil {
+		return false
+	}
+	if target.RangedPower > 0 {
+		return true
+	}
+	return math.Hypot(target.X, target.Y) <= target.MeleeRange
+}
+
+func (c *Combat) DelayNearest(turns int) {
+	t := c.nearestLiving()
+	if t == nil {
+		return
+	}
+	t.Stunned += turns
+}
+
+func (c *Combat) DelayAll(turns int) {
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		e.Stunned += turns
+	}
+}

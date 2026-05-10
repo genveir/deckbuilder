@@ -11,7 +11,8 @@ import (
 type RunPhase int
 
 const (
-	RunInCombat RunPhase = iota
+	RunSelectClass RunPhase = iota
+	RunInCombat
 	RunReward
 	RunWon
 	RunLost
@@ -20,6 +21,7 @@ const (
 const RewardChoices = 3
 
 type Run struct {
+	Class           runes.Class
 	PlayerHP, MaxHP int
 	Deck            []runes.Card
 	EncounterIdx    int
@@ -33,15 +35,23 @@ type Run struct {
 }
 
 func NewRun(seed int64) *Run {
-	r := &Run{
+	return &Run{
 		MaxHP:           combat.DefaultMaxHP,
 		PlayerHP:        combat.DefaultMaxHP,
-		Deck:            runes.ElementalistStarter(),
 		TotalEncounters: numEncounters(),
+		Phase:           RunSelectClass,
 		rng:             rand.New(rand.NewSource(seed)),
 	}
+}
+
+// PickClass starts the run with the given class and its starter deck.
+func (r *Run) PickClass(class runes.Class) {
+	if r.Phase != RunSelectClass {
+		return
+	}
+	r.Class = class
+	r.Deck = runes.StarterDeck(class)
 	r.startEncounter()
-	return r
 }
 
 func (r *Run) startEncounter() {
@@ -71,7 +81,7 @@ func (r *Run) Update(dt float64) {
 }
 
 func (r *Run) rollRewards() []runes.Card {
-	pool := runes.RewardPool()
+	pool := runes.RewardPool(r.Class)
 	r.rng.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
 	n := RewardChoices
 	if n > len(pool) {

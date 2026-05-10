@@ -8,6 +8,24 @@ const (
 	Physical
 )
 
+type Class int
+
+const (
+	ClassElementalist Class = iota
+	ClassMesmer
+)
+
+func (c Class) String() string {
+	switch c {
+	case ClassElementalist:
+		return "Elementalist"
+	case ClassMesmer:
+		return "Mesmer"
+	default:
+		return "Unknown"
+	}
+}
+
 // Effect applies a card's effect to the combat world. The combat package
 // implements World; runes only depend on this small interface to avoid an
 // import cycle.
@@ -18,6 +36,9 @@ type World interface {
 	GrantMovement(extra float64)
 	HasMoved() bool
 	ConsumeAllMovement()
+	NearestIntendsAttack() bool
+	DelayNearest(turns int)
+	DelayAll(turns int)
 }
 
 type Card struct {
@@ -86,6 +107,50 @@ func Move() Card {
 	}
 }
 
+// --- Mesmer cards ---
+
+func AphyrDelay() Card {
+	return Card{
+		Name:        "Aphyr",
+		Glyph:       "ᚬ",
+		Cost:        1,
+		Description: "Delay the nearest enemy's next action by 1 turn.",
+		Effect:      func(w World) { w.DelayNearest(1) },
+	}
+}
+
+func IsaAggressive() Card {
+	return Card{
+		Name:        "Isa (aggressive)",
+		Glyph:       "ᛁ↯",
+		Cost:        1,
+		Description: "Deal 8 damage. Castable only if the nearest enemy intends to attack.",
+		Effect:      func(w World) { w.DamageNearest(8, Physical) },
+		CanPlay: func(w World) (bool, string) {
+			if !w.NearestIntendsAttack() {
+				return false, "nearest must intend to attack"
+			}
+			return true, ""
+		},
+	}
+}
+
+func IsaPassive() Card {
+	return Card{
+		Name:        "Isa (passive)",
+		Glyph:       "ᛁ◦",
+		Cost:        1,
+		Description: "Deal 8 damage. Castable only if the nearest enemy does NOT intend to attack.",
+		Effect:      func(w World) { w.DamageNearest(8, Physical) },
+		CanPlay: func(w World) (bool, string) {
+			if w.NearestIntendsAttack() {
+				return false, "nearest must not intend to attack"
+			}
+			return true, ""
+		},
+	}
+}
+
 // --- Reward pool (cards offered between combats) ---
 
 func StrongFireAttack() Card {
@@ -138,20 +203,92 @@ func Sprint() Card {
 	}
 }
 
-// RewardPool returns all cards the run may offer between combats.
-func RewardPool() []Card {
-	return []Card{
-		StrongFireAttack(),
-		GreaterFireAttack(),
-		Firestorm(),
-		StoneSkin(),
-		Sprint(),
+func GreaterAphyr() Card {
+	return Card{
+		Name:        "Greater Aphyr",
+		Glyph:       "ᚬ+",
+		Cost:        2,
+		Description: "Delay the nearest enemy's next 2 actions.",
+		Effect:      func(w World) { w.DelayNearest(2) },
 	}
 }
 
-// ElementalistStarter returns the 10-card Elementalist starting deck.
-func ElementalistStarter() []Card {
-	deck := make([]Card, 0, 10)
+func MassDelay() Card {
+	return Card{
+		Name:        "Mass Delay",
+		Glyph:       "ᚬ*",
+		Cost:        2,
+		Description: "Delay every enemy's next action by 1 turn.",
+		Effect:      func(w World) { w.DelayAll(1) },
+	}
+}
+
+func SharpIsa() Card {
+	return Card{
+		Name:        "Sharp Isa",
+		Glyph:       "ᛁ↯+",
+		Cost:        1,
+		Description: "Deal 13 damage. Castable only if the nearest enemy intends to attack.",
+		Effect:      func(w World) { w.DamageNearest(13, Physical) },
+		CanPlay: func(w World) (bool, string) {
+			if !w.NearestIntendsAttack() {
+				return false, "nearest must intend to attack"
+			}
+			return true, ""
+		},
+	}
+}
+
+func ColdIsa() Card {
+	return Card{
+		Name:        "Cold Isa",
+		Glyph:       "ᛁ◦+",
+		Cost:        1,
+		Description: "Deal 13 damage. Castable only if the nearest enemy does NOT intend to attack.",
+		Effect:      func(w World) { w.DamageNearest(13, Physical) },
+		CanPlay: func(w World) (bool, string) {
+			if w.NearestIntendsAttack() {
+				return false, "nearest must not intend to attack"
+			}
+			return true, ""
+		},
+	}
+}
+
+// StarterDeck returns the starting deck for the chosen class.
+func StarterDeck(c Class) []Card {
+	switch c {
+	case ClassMesmer:
+		return mesmerStarter()
+	default:
+		return elementalistStarter()
+	}
+}
+
+// RewardPool returns the reward cards offered between combats for the chosen
+// class.
+func RewardPool(c Class) []Card {
+	switch c {
+	case ClassMesmer:
+		return []Card{
+			GreaterAphyr(),
+			MassDelay(),
+			SharpIsa(),
+			ColdIsa(),
+			Sprint(),
+		}
+	default:
+		return []Card{
+			StrongFireAttack(),
+			GreaterFireAttack(),
+			Firestorm(),
+			StoneSkin(),
+		}
+	}
+}
+
+func elementalistStarter() []Card {
+	deck := make([]Card, 0, 9)
 	for i := 0; i < 4; i++ {
 		deck = append(deck, FireAttack())
 	}
@@ -161,6 +298,22 @@ func ElementalistStarter() []Card {
 	for i := 0; i < 2; i++ {
 		deck = append(deck, FrostAttack())
 	}
-	deck = append(deck, Move())
+	return deck
+}
+
+func mesmerStarter() []Card {
+	deck := make([]Card, 0, 10)
+	for i := 0; i < 2; i++ {
+		deck = append(deck, AphyrDelay())
+	}
+	for i := 0; i < 3; i++ {
+		deck = append(deck, IsaAggressive())
+	}
+	for i := 0; i < 3; i++ {
+		deck = append(deck, IsaPassive())
+	}
+	for i := 0; i < 2; i++ {
+		deck = append(deck, Move())
+	}
 	return deck
 }

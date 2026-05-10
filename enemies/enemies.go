@@ -9,6 +9,8 @@ type Enemy struct {
 	MeleeRange  float64
 	MoveSpeed   float64
 	AttackPower int
+	RangedPower int              // 0 = no ranged attack
+	Stunned     int              // turns remaining where the enemy skips its action
 	Weakness    runes.DamageType // hidden from the player
 	Intent      string           // human-readable next action
 }
@@ -19,7 +21,7 @@ func NewGoblin(x, y float64) *Enemy {
 		HP:          22, MaxHP: 22,
 		X: x, Y: y,
 		MeleeRange:  40,
-		MoveSpeed:   60,
+		MoveSpeed:   100,
 		AttackPower: 6,
 		Weakness:    runes.Frost,
 	}
@@ -31,8 +33,9 @@ func NewWraith(x, y float64) *Enemy {
 		HP:          16, MaxHP: 16,
 		X: x, Y: y,
 		MeleeRange:  35,
-		MoveSpeed:   45,
-		AttackPower: 8,
+		MoveSpeed:   25,
+		AttackPower: 0,
+		RangedPower: 5,
 		Weakness:    runes.Fire,
 	}
 }
