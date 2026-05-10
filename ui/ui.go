@@ -92,7 +92,34 @@ var (
 	slowCol        = color.RGBA{240, 200, 90, 255}
 	rangeRingCol   = color.RGBA{180, 130, 220, 110}
 	rangeTargetCol = color.RGBA{255, 200, 130, 220}
+
+	logBg          = color.RGBA{16, 18, 26, 220}
+	logEdge        = color.RGBA{70, 80, 110, 255}
+	logColPlayer   = color.RGBA{180, 230, 200, 255}
+	logColEnemy    = color.RGBA{240, 160, 150, 255}
+	logColMinion   = color.RGBA{170, 220, 220, 255}
+	logColSystem   = color.RGBA{170, 170, 180, 255}
 )
+
+const (
+	LogPanelX = 880
+	LogPanelY = 160
+	LogPanelW = 380
+	LogPanelH = 480
+)
+
+func logKindColor(k combat.LogKind) color.RGBA {
+	switch k {
+	case combat.LogPlayer:
+		return logColPlayer
+	case combat.LogEnemy:
+		return logColEnemy
+	case combat.LogMinion:
+		return logColMinion
+	default:
+		return logColSystem
+	}
+}
 
 func damageTypeColor(t runes.DamageType) color.RGBA {
 	switch t {
@@ -133,9 +160,33 @@ func drawCombatScreen(screen *ebiten.Image, v RunView) {
 	drawStage(screen, c)
 	drawHand(screen, c)
 	drawHUD(screen, v)
+	drawLog(screen, c)
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
+}
+
+// drawLog renders the most recent combat events along the right side. Newest
+// at the bottom — chronological reading order.
+func drawLog(screen *ebiten.Image, c *combat.Combat) {
+	vector.DrawFilledRect(screen, LogPanelX, LogPanelY, LogPanelW, LogPanelH, logBg, true)
+	vector.StrokeRect(screen, LogPanelX, LogPanelY, LogPanelW, LogPanelH, 1, logEdge, true)
+	ebitenutil.DebugPrintAt(screen, "Combat log", LogPanelX+8, LogPanelY+4)
+
+	const (
+		lineH = 16
+		topY  = LogPanelY + 24
+		botY  = LogPanelY + LogPanelH - 8
+	)
+	visible := (botY - topY) / lineH
+	start := len(c.Log) - visible
+	if start < 0 {
+		start = 0
+	}
+	for i, e := range c.Log[start:] {
+		y := topY + i*lineH
+		drawColoredText(screen, e.Text, LogPanelX+8, y, logKindColor(e.Kind), 1)
+	}
 }
 
 // drawRangePreview draws the range circle and likely target for the card the

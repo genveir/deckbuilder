@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 
 	"deckbuilder/enemies"
 	"deckbuilder/runes"
@@ -66,6 +67,24 @@ type StagedCard struct {
 	PlaceX, PlaceY float64
 }
 
+// LogKind classifies log entries so the UI can colour them.
+type LogKind int
+
+const (
+	LogPlayer LogKind = iota
+	LogEnemy
+	LogMinion
+	LogSystem
+)
+
+// LogEntry is one line in the combat event log.
+type LogEntry struct {
+	Text string
+	Kind LogKind
+}
+
+const MaxLogEntries = 80
+
 type Combat struct {
 	Player                Player
 	PlayerHP, PlayerMaxHP int
@@ -92,6 +111,9 @@ type Combat struct {
 	Phase          Phase
 
 	Turn int // player turns elapsed in this combat (1-based)
+
+	Log   []LogEntry
+	actor string // name of the entity currently producing log entries
 
 	Popups []DamagePopup
 
@@ -125,6 +147,14 @@ func New(seed int64, hp, maxHP int, deck []runes.Card, foes []*enemies.Enemy) *C
 	return c
 }
 
+func (c *Combat) addLog(kind LogKind, format string, args ...interface{}) {
+	entry := LogEntry{Kind: kind, Text: fmt.Sprintf(format, args...)}
+	c.Log = append(c.Log, entry)
+	if len(c.Log) > MaxLogEntries {
+		c.Log = c.Log[len(c.Log)-MaxLogEntries:]
+	}
+}
+
 func (c *Combat) shuffle(cards []runes.Card) {
 	c.rng.Shuffle(len(cards), func(i, j int) { cards[i], cards[j] = cards[j], cards[i] })
 }
@@ -132,12 +162,16 @@ func (c *Combat) shuffle(cards []runes.Card) {
 func (c *Combat) startPlayerTurn() {
 	c.compactMinions()
 	c.compactWalls()
+	c.actor = "Minion"
 	c.runMinionPrograms()
+	c.actor = ""
 	c.checkVictory()
 	if c.Phase == PhaseWon {
+		c.addLog(LogSystem, "All enemies defeated")
 		return
 	}
 	c.Turn++
+	c.addLog(LogSystem, "— Turn %d —", c.Turn)
 	c.Energy = StartingEnergy
 	c.MaxEnergy = StartingEnergy
 	c.PlayerArmor = 0
@@ -191,6 +225,11 @@ func (c *Combat) runMinionPrograms() {
 		c.Popups = append(c.Popups, DamagePopup{
 			X: target.X, Y: target.Y, Amount: dealt, Type: runes.Physical,
 		})
+		if target.HP == 0 {
+			c.addLog(LogMinion, "Minion slays %s (%d dmg)", target.Name, dealt)
+		} else {
+			c.addLog(LogMinion, "Minion deals %d to %s (%d/%d)", dealt, target.Name, target.HP, target.MaxHP)
+		}
 	}
 }
 
@@ -287,6 +326,16 @@ func (c *Combat) CastSpell() bool {
 	if c.Phase != PhasePlayer || c.SpellCast || len(c.Stage) == 0 {
 		return false
 	}
+	names := make([]string, 0, len(c.Stage))
+	for _, sc := range c.Stage {
+		names = append(names, sc.Card.Name)
+	}
+	verb := "Cast"
+	if c.StageIsSlow() {
+		verb = "Slow cast (after enemy turn)"
+	}
+	c.addLog(LogPlayer, "%s: %s", verb, strings.Join(names, " + "))
+
 	if c.StageIsSlow() {
 		c.pendingSlowSpell = append(c.pendingSlowSpell[:0], c.Stage...)
 		c.Stage = c.Stage[:0]
@@ -294,7 +343,9 @@ func (c *Combat) CastSpell() bool {
 		c.EndTurn() // hand to discard, transition to PhaseEnemy
 		return true
 	}
+	c.actor = "Player"
 	c.resolveSpell(c.Stage)
+	c.actor = ""
 	c.Stage = c.Stage[:0]
 	c.SpellCast = true
 	c.refreshIntents()
@@ -442,6 +493,7 @@ func (c *Combat) Update(dt float64) {
 		if e.Stunned > 0 {
 			e.Stunned--
 			e.Intent = "delayed"
+			c.addLog(LogEnemy, "%s is delayed", e.Name)
 			continue
 		}
 		c.runEnemyProgram(e)
@@ -454,7 +506,10 @@ func (c *Combat) Update(dt float64) {
 	// All enemies have acted. Resolve any deferred slow spell before starting
 	// the next player turn.
 	if len(c.pendingSlowSpell) > 0 {
+		c.addLog(LogPlayer, "Slow spell resolves")
+		c.actor = "Player"
 		c.resolveSpell(c.pendingSlowSpell)
+		c.actor = ""
 		c.pendingSlowSpell = c.pendingSlowSpell[:0]
 		c.checkVictory()
 		if c.Phase == PhaseWon {
@@ -511,9 +566,15 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 			c.Popups = append(c.Popups, DamagePopup{
 				X: t.x, Y: t.y, Amount: dmg, Type: dt,
 			})
+			if t.minion.HP == 0 {
+				c.addLog(LogEnemy, "%s destroys a minion (%d %s)", e.Name, dmg, dt)
+			} else {
+				c.addLog(LogEnemy, "%s hits minion for %d %s (%d/%d)", e.Name, dmg, dt, t.minion.HP, t.minion.MaxHP)
+			}
 			return
 		}
 		c.applyDamageToPlayer(dmg)
+		c.addLog(LogEnemy, "%s hits Player for %d %s (HP %d/%d, armor %d)", e.Name, dmg, dt, c.PlayerHP, c.PlayerMaxHP, c.PlayerArmor)
 	}
 	moveTowardPoint := func(tx, ty, step float64) {
 		dx := tx - e.X
@@ -574,6 +635,11 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 			c.Popups = append(c.Popups, DamagePopup{
 				X: cpx, Y: cpy, Amount: e.AttackPower, Type: runes.Physical,
 			})
+			if blocker.HP == 0 {
+				c.addLog(LogEnemy, "%s shatters a wall", e.Name)
+			} else {
+				c.addLog(LogEnemy, "%s strikes wall for %d (%d/%d)", e.Name, e.AttackPower, blocker.HP, blocker.MaxHP)
+			}
 			return
 		}
 		step := math.Min(distToWall-e.MeleeRange, e.MoveSpeed)
@@ -745,10 +811,12 @@ func (c *Combat) HasTargetInRange(maxRange float64) bool {
 func (c *Combat) DamageNearest(amount int, dt runes.DamageType, maxRange float64) {
 	target := c.nearestEnemyInRange(maxRange)
 	if target == nil {
+		c.addLog(LogPlayer, "%s spell: no target in range", c.actorOr("Spell"))
 		return
 	}
 	dealt := amount
-	if target.Weakness == dt {
+	weak := target.Weakness == dt
+	if weak {
 		dealt = (amount*3 + 1) / 2 // 1.5x rounded
 	}
 	target.HP -= dealt
@@ -758,6 +826,22 @@ func (c *Combat) DamageNearest(amount int, dt runes.DamageType, maxRange float64
 	c.Popups = append(c.Popups, DamagePopup{
 		X: target.X, Y: target.Y, Amount: dealt, Type: dt,
 	})
+	weakNote := ""
+	if weak {
+		weakNote = " (weak)"
+	}
+	if target.HP == 0 {
+		c.addLog(LogPlayer, "%s slays %s with %d %s%s", c.actorOr("Player"), target.Name, dealt, dt, weakNote)
+	} else {
+		c.addLog(LogPlayer, "%s deals %d %s to %s%s (%d/%d)", c.actorOr("Player"), dealt, dt, target.Name, weakNote, target.HP, target.MaxHP)
+	}
+}
+
+func (c *Combat) actorOr(fallback string) string {
+	if c.actor == "" {
+		return fallback
+	}
+	return c.actor
 }
 
 func (c *Combat) advancePopups(dt float64) {
@@ -775,6 +859,7 @@ func (c *Combat) advancePopups(dt float64) {
 }
 
 func (c *Combat) DamageAll(amount int, dt runes.DamageType, maxRange float64) {
+	hits := 0
 	for _, e := range c.Enemies {
 		if e.HP <= 0 {
 			continue
@@ -789,7 +874,8 @@ func (c *Combat) DamageAll(amount int, dt runes.DamageType, maxRange float64) {
 			continue
 		}
 		dealt := amount
-		if e.Weakness == dt {
+		weak := e.Weakness == dt
+		if weak {
 			dealt = (amount*3 + 1) / 2
 		}
 		e.HP -= dealt
@@ -799,16 +885,40 @@ func (c *Combat) DamageAll(amount int, dt runes.DamageType, maxRange float64) {
 		c.Popups = append(c.Popups, DamagePopup{
 			X: e.X, Y: e.Y, Amount: dealt, Type: dt,
 		})
+		hits++
+		weakNote := ""
+		if weak {
+			weakNote = " (weak)"
+		}
+		if e.HP == 0 {
+			c.addLog(LogPlayer, "AOE slays %s with %d %s%s", e.Name, dealt, dt, weakNote)
+		} else {
+			c.addLog(LogPlayer, "AOE deals %d %s to %s%s (%d/%d)", dealt, dt, e.Name, weakNote, e.HP, e.MaxHP)
+		}
+	}
+	if hits == 0 {
+		c.addLog(LogPlayer, "AOE finds no targets")
 	}
 }
 
-func (c *Combat) GainArmor(amount int) { c.PlayerArmor += amount }
+func (c *Combat) GainArmor(amount int) {
+	c.PlayerArmor += amount
+	c.addLog(LogPlayer, "Gain %d armor (now %d)", amount, c.PlayerArmor)
+}
 
-func (c *Combat) GrantMovement(extra float64) { c.MovementBudget += extra }
+func (c *Combat) GrantMovement(extra float64) {
+	c.MovementBudget += extra
+	c.addLog(LogPlayer, "+%.0f movement (now %.0f)", extra, c.MovementBudget)
+}
 
 func (c *Combat) HasMoved() bool { return c.hasMoved }
 
-func (c *Combat) ConsumeAllMovement() { c.MovementBudget = 0 }
+func (c *Combat) ConsumeAllMovement() {
+	if c.MovementBudget > 0 {
+		c.addLog(LogPlayer, "Movement locked")
+	}
+	c.MovementBudget = 0
+}
 
 // NearestIntendsAttack returns true if the nearest living, non-stunned enemy
 // will deal damage to the player on its next turn (not to a minion).
@@ -830,9 +940,11 @@ func (c *Combat) NearestIntendsAttack() bool {
 func (c *Combat) DelayNearest(turns int, maxRange float64) {
 	t := c.nearestEnemyInRange(maxRange)
 	if t == nil {
+		c.addLog(LogPlayer, "Delay finds no target")
 		return
 	}
 	t.Stunned += turns
+	c.addLog(LogPlayer, "Delays %s for %d turn(s)", t.Name, turns)
 }
 
 func (c *Combat) DelayAll(turns int) {
@@ -866,6 +978,7 @@ func (c *Combat) SummonMinionAt(power, hp int, x, y float64) {
 		X: x, Y: y,
 		AttackPower: power,
 	})
+	c.addLog(LogPlayer, "Summon minion (%d/turn, %d HP)", power, hp)
 }
 
 func (c *Combat) DrainNearest(amount int, maxRange float64) {
@@ -878,10 +991,12 @@ func (c *Combat) DrainNearest(amount int, maxRange float64) {
 }
 
 func (c *Combat) HealPlayer(amount int) {
+	before := c.PlayerHP
 	c.PlayerHP += amount
 	if c.PlayerHP > c.PlayerMaxHP {
 		c.PlayerHP = c.PlayerMaxHP
 	}
+	c.addLog(LogPlayer, "Heal %d (HP %d → %d)", c.PlayerHP-before, before, c.PlayerHP)
 }
 
 func (c *Combat) SacrificeNearestMinion(consumeHP, dmg int, maxRange float64) {
@@ -904,6 +1019,11 @@ func (c *Combat) SacrificeNearestMinion(consumeHP, dmg int, maxRange float64) {
 	if nearest.HP < 0 {
 		nearest.HP = 0
 	}
+	if nearest.HP == 0 {
+		c.addLog(LogPlayer, "Sacrifice consumes minion (%d HP)", consumeHP)
+	} else {
+		c.addLog(LogPlayer, "Sacrifice -%d minion HP (%d/%d)", consumeHP, nearest.HP, nearest.MaxHP)
+	}
 	c.DamageNearest(dmg, runes.Physical, maxRange)
 }
 
@@ -921,12 +1041,16 @@ func (c *Combat) LoseHP(amount int) {
 	if c.PlayerHP < 0 {
 		c.PlayerHP = 0
 	}
+	c.addLog(LogPlayer, "Lose %d HP (HP %d/%d)", amount, c.PlayerHP, c.PlayerMaxHP)
 	if c.PlayerHP == 0 {
 		c.Phase = PhaseLost
 	}
 }
 
-func (c *Combat) AddEnergy(amount int) { c.Energy += amount }
+func (c *Combat) AddEnergy(amount int) {
+	c.Energy += amount
+	c.addLog(LogPlayer, "+%d energy (now %d)", amount, c.Energy)
+}
 
 // PlaceWall creates a wall segment of the given length and HP, centered at
 // (cx, cy) and oriented perpendicular to the line from the player to (cx, cy).
@@ -949,6 +1073,7 @@ func (c *Combat) PlaceWall(cx, cy float64, length float64, hp int) {
 		HP: hp, MaxHP: hp,
 	})
 	c.markGridDirty()
+	c.addLog(LogPlayer, "Wall raised (%d HP)", hp)
 }
 
 func (c *Combat) compactWalls() {
@@ -1014,13 +1139,16 @@ func (c *Combat) NearestHasIntentRune(maxRange float64) bool {
 func (c *Combat) CopyNearestIntent(maxRange float64) {
 	target := c.nearestNonStunnedInRange(maxRange)
 	if target == nil {
+		c.addLog(LogPlayer, "Mimic finds no target")
 		return
 	}
 	card, ok := c.buildIntentRune(target)
 	if !ok {
+		c.addLog(LogPlayer, "Mimic: %s has no rune to copy", target.Name)
 		return
 	}
 	c.Hand = append(c.Hand, card)
+	c.addLog(LogPlayer, "Mimic copies %s into hand", card.Name)
 }
 
 func (c *Combat) nearestNonStunnedInRange(maxRange float64) *enemies.Enemy {
