@@ -82,6 +82,7 @@ var (
 	frostCol    = color.RGBA{120, 200, 255, 255}
 	physicalCol = color.RGBA{230, 230, 230, 255}
 	minionCol   = color.RGBA{120, 220, 160, 255}
+	wallCol     = color.RGBA{170, 160, 140, 255}
 )
 
 func damageTypeColor(t runes.DamageType) color.RGBA {
@@ -135,8 +136,22 @@ func drawPlacementPreview(screen *ebiten.Image, c *combat.Combat) {
 	if rx, ry, ok := HitRadar(mx, my); ok {
 		gx := float32(RadarCX + rx)
 		gy := float32(RadarCY + ry)
-		vector.StrokeCircle(screen, gx, gy, 8, 2, minionCol, true)
-		vector.StrokeLine(screen, RadarCX, RadarCY, gx, gy, 1, minionCol, true)
+		switch card.PlacementShape {
+		case runes.PlacementWall:
+			// perpendicular preview through cursor (length 100, matches card)
+			d := math.Hypot(rx, ry)
+			if d == 0 {
+				rx, ry, d = 1, 0, 1
+			}
+			pxv := float32(-ry / d)
+			pyv := float32(rx / d)
+			const half = float32(50)
+			vector.StrokeLine(screen, gx-pxv*half, gy-pyv*half, gx+pxv*half, gy+pyv*half, 4, wallCol, true)
+			vector.StrokeLine(screen, RadarCX, RadarCY, gx, gy, 1, minionCol, true)
+		default:
+			vector.StrokeCircle(screen, gx, gy, 8, 2, minionCol, true)
+			vector.StrokeLine(screen, RadarCX, RadarCY, gx, gy, 1, minionCol, true)
+		}
 	}
 	banner := fmt.Sprintf("Placing: %s — left-click radar to confirm, right-click to cancel", card.Name)
 	ebitenutil.DebugPrintAt(screen, banner, 40, 30)
@@ -171,8 +186,8 @@ func drawPopups(screen *ebiten.Image, c *combat.Combat) {
 		}
 		alpha := float32(1.0 - t*t) // ease-out fade
 		dy := -float64(40) * t
-		x := int(RadarCX + p.X)
-		y := int(RadarCY + p.Y + dy - 10)
+		x := int(float64(RadarCX) + (p.X - c.Player.X))
+		y := int(float64(RadarCY) + (p.Y - c.Player.Y) + dy - 10)
 		drawColoredText(screen, fmt.Sprintf("%d", p.Amount), x-6, y, damageTypeColor(p.Type), alpha)
 	}
 }
@@ -186,9 +201,23 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 	// player dot
 	vector.DrawFilledCircle(screen, RadarCX, RadarCY, 8, playerColor, true)
 
+	for _, w := range c.Walls {
+		if w.HP <= 0 {
+			continue
+		}
+		x1 := float32(RadarCX + (w.X1 - c.Player.X))
+		y1 := float32(RadarCY + (w.Y1 - c.Player.Y))
+		x2 := float32(RadarCX + (w.X2 - c.Player.X))
+		y2 := float32(RadarCY + (w.Y2 - c.Player.Y))
+		vector.StrokeLine(screen, x1, y1, x2, y2, 5, wallCol, true)
+		mx := int((x1 + x2) / 2)
+		my := int((y1 + y2) / 2)
+		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("wall %d/%d", w.HP, w.MaxHP), mx-24, my-18)
+	}
+
 	for _, e := range c.Enemies {
-		ex := float32(RadarCX + e.X)
-		ey := float32(RadarCY + e.Y)
+		ex := float32(RadarCX + (e.X - c.Player.X))
+		ey := float32(RadarCY + (e.Y - c.Player.Y))
 		col := enemyColor
 		if e.HP <= 0 {
 			col = enemyDeadCol
@@ -205,8 +234,8 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 		if m.HP <= 0 {
 			continue
 		}
-		mx := float32(RadarCX + m.X)
-		my := float32(RadarCY + m.Y)
+		mx := float32(RadarCX + (m.X - c.Player.X))
+		my := float32(RadarCY + (m.Y - c.Player.Y))
 		vector.DrawFilledCircle(screen, mx, my, 7, minionCol, true)
 		label := fmt.Sprintf("M %d/%d  (%d/t)", m.HP, m.MaxHP, m.AttackPower)
 		ebitenutil.DebugPrintAt(screen, label, int(mx)-32, int(my)+10)

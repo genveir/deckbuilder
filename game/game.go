@@ -52,7 +52,7 @@ func (g *Game) handleCombatInput() {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 			mx, my := ebiten.CursorPosition()
 			if rx, ry, ok := ui.HitRadar(mx, my); ok {
-				c.ConfirmPlacement(rx, ry)
+				c.ConfirmPlacement(c.Player.X+rx, c.Player.Y+ry)
 			}
 		}
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) ||

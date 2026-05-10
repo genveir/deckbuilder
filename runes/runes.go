@@ -65,7 +65,17 @@ type World interface {
 	AddEnergy(amount int)
 	NearestHasIntentRune() bool
 	CopyNearestIntent()
+	PlaceWall(cx, cy float64, length float64, hp int)
 }
+
+// PlacementShape tells the UI what kind of placement preview to draw and what
+// the click point represents.
+type PlacementShape int
+
+const (
+	PlacementPoint PlacementShape = iota // a single dot at the cursor
+	PlacementWall                        // a perpendicular wall through the cursor
+)
 
 type Card struct {
 	Name        string
@@ -76,8 +86,10 @@ type Card struct {
 	Effect func(World)
 	// PlacementEffect is an alternative to Effect: the card requires the
 	// player to choose a target position on the radar before resolving.
-	// (x, y) are radar coordinates relative to the player.
+	// (x, y) are world coordinates.
 	PlacementEffect func(World, float64, float64)
+	// PlacementShape controls how the placement target is previewed.
+	PlacementShape PlacementShape
 	// CanPlay returns whether the card may be played right now and, if not,
 	// a short reason for the UI. nil means always playable (subject to energy).
 	CanPlay func(World) (bool, string)
@@ -262,6 +274,19 @@ func StoneSkin() Card {
 	}
 }
 
+func WallOfStone() Card {
+	return Card{
+		Name:           "Wall of Stone",
+		Glyph:          "ᛏ‖",
+		Cost:           2,
+		Description:    "Raise a stone wall (length 100, 24 HP) at a chosen point. Blocks movement; enemies can break it.",
+		PlacementShape: PlacementWall,
+		PlacementEffect: func(w World, x, y float64) {
+			w.PlaceWall(x, y, 100, 24)
+		},
+	}
+}
+
 func Sprint() Card {
 	return Card{
 		Name:        "Sprint",
@@ -423,6 +448,7 @@ func RewardPool(c Class) []Card {
 			GreaterFireAttack(),
 			Firestorm(),
 			StoneSkin(),
+			WallOfStone(),
 		}
 	}
 }
