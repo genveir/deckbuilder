@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"deckbuilder/combat"
@@ -171,7 +170,7 @@ func drawCombatScreen(screen *ebiten.Image, v RunView) {
 func drawLog(screen *ebiten.Image, c *combat.Combat) {
 	vector.DrawFilledRect(screen, LogPanelX, LogPanelY, LogPanelW, LogPanelH, logBg, true)
 	vector.StrokeRect(screen, LogPanelX, LogPanelY, LogPanelW, LogPanelH, 1, logEdge, true)
-	ebitenutil.DebugPrintAt(screen, "Combat log", LogPanelX+8, LogPanelY+4)
+	drawText(screen, "Combat log", LogPanelX+8, LogPanelY+4, faceSmall, white)
 
 	const (
 		lineH = 16
@@ -286,7 +285,7 @@ func drawStage(screen *ebiten.Image, c *combat.Combat) {
 	} else if len(c.Stage) == 0 {
 		header = "Spell stage:  (click a rune to add it)"
 	}
-	ebitenutil.DebugPrintAt(screen, header, StageStartX, StageY-20)
+	drawText(screen, header, StageStartX, StageY-20, faceSmall, white)
 
 	for i, sc := range c.Stage {
 		x := StageStartX + i*(StageCardW+StageGap)
@@ -297,9 +296,9 @@ func drawStage(screen *ebiten.Image, c *combat.Combat) {
 			edge = slowCol
 		}
 		vector.StrokeRect(screen, float32(x), float32(y), StageCardW, StageCardH, 1, edge, true)
-		ebitenutil.DebugPrintAt(screen, sc.Card.Glyph, x+8, y+6)
-		ebitenutil.DebugPrintAt(screen, sc.Card.Name, x+8, y+24)
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", sc.Card.Cost), x+8, y+StageCardH-20)
+		drawText(screen, sc.Card.Glyph, x+8, y+6, faceBody, white)
+		drawText(screen, sc.Card.Name, x+8, y+24, faceSmall, white)
+		drawText(screen, fmt.Sprintf("Cost: %d", sc.Card.Cost), x+8, y+StageCardH-20, faceSmall, white)
 		if sc.Card.Slow {
 			drawColoredText(screen, "slow", x+StageCardW-36, y+StageCardH-20, slowCol, 1)
 		}
@@ -314,7 +313,7 @@ func drawStage(screen *ebiten.Image, c *combat.Combat) {
 			castVerb = "press E to cast — SLOW (resolves after enemies)"
 		}
 		summary := fmt.Sprintf("%d rune(s), %d energy — %s", len(c.Stage), total, castVerb)
-		ebitenutil.DebugPrintAt(screen, summary, StageStartX, StageY+StageCardH+8)
+		drawText(screen, summary, StageStartX, StageY+StageCardH+8, faceSmall, white)
 	}
 }
 
@@ -345,28 +344,17 @@ func drawPlacementPreview(screen *ebiten.Image, c *combat.Combat) {
 		}
 	}
 	banner := fmt.Sprintf("Placing: %s — left-click radar to confirm, right-click to cancel", card.Name)
-	ebitenutil.DebugPrintAt(screen, banner, 40, 30)
+	drawText(screen, banner, 40, 30, faceSmall, white)
 }
 
-// drawColoredText renders text via DebugPrint into an offscreen image and
-// composites it with a color scale. Allocates per call; fine for small,
-// short-lived bits of text like damage popups.
 func drawColoredText(screen *ebiten.Image, s string, x, y int, c color.RGBA, alpha float32) {
-	w := len(s)*7 + 4
-	if w < 8 {
-		w = 8
+	clr := color.RGBA{
+		R: uint8(float32(c.R) * alpha),
+		G: uint8(float32(c.G) * alpha),
+		B: uint8(float32(c.B) * alpha),
+		A: uint8(255 * alpha),
 	}
-	img := ebiten.NewImage(w, 16)
-	ebitenutil.DebugPrint(img, s)
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(float64(x), float64(y))
-	op.ColorScale.Scale(
-		float32(c.R)/255*alpha,
-		float32(c.G)/255*alpha,
-		float32(c.B)/255*alpha,
-		alpha,
-	)
-	screen.DrawImage(img, op)
+	drawText(screen, s, x, y, faceSmall, clr)
 }
 
 func drawPopups(screen *ebiten.Image, c *combat.Combat) {
@@ -403,7 +391,7 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 		vector.StrokeLine(screen, x1, y1, x2, y2, 5, wallCol, true)
 		mx := int((x1 + x2) / 2)
 		my := int((y1 + y2) / 2)
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("wall %d/%d", w.HP, w.MaxHP), mx-24, my-18)
+		drawText(screen, fmt.Sprintf("wall %d/%d", w.HP, w.MaxHP), mx-24, my-18, faceSmall, wallCol)
 	}
 
 	for _, e := range c.Enemies {
@@ -415,9 +403,9 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 		}
 		vector.DrawFilledCircle(screen, ex, ey, 10, col, true)
 		label := fmt.Sprintf("%s %d/%d", e.Name, e.HP, e.MaxHP)
-		ebitenutil.DebugPrintAt(screen, label, int(ex)-30, int(ey)+14)
+		drawText(screen, label, int(ex)-30, int(ey)+14, faceSmall, col)
 		if e.HP > 0 && e.Intent != "" {
-			ebitenutil.DebugPrintAt(screen, "intent: "+e.Intent, int(ex)-30, int(ey)+28)
+			drawText(screen, "intent: "+e.Intent, int(ex)-30, int(ey)+28, faceSmall, white)
 		}
 	}
 
@@ -429,7 +417,7 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 		my := float32(RadarCY + (m.Y - c.Player.Y))
 		vector.DrawFilledCircle(screen, mx, my, 7, minionCol, true)
 		label := fmt.Sprintf("M %d/%d  (%d/t)", m.HP, m.MaxHP, m.AttackPower)
-		ebitenutil.DebugPrintAt(screen, label, int(mx)-32, int(my)+10)
+		drawText(screen, label, int(mx)-32, int(my)+10, faceSmall, minionCol)
 	}
 }
 
@@ -471,7 +459,7 @@ func drawMovePreview(screen *ebiten.Image, c *combat.Combat) {
 	if !inBudget {
 		label += "  (clamped)"
 	}
-	ebitenutil.DebugPrintAt(screen, label, int(gx)+12, int(gy)-6)
+	drawText(screen, label, int(gx)+12, int(gy)-6, faceSmall, col)
 }
 
 func drawHand(screen *ebiten.Image, c *combat.Combat) {
@@ -488,9 +476,9 @@ func drawHand(screen *ebiten.Image, c *combat.Combat) {
 			bg = cardBgHi
 		}
 		vector.DrawFilledRect(screen, float32(x), float32(y), CardW, CardH, bg, true)
-		ebitenutil.DebugPrintAt(screen, card.Glyph, x+8, y+6)
-		ebitenutil.DebugPrintAt(screen, card.Name, x+8, y+24)
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", card.Cost), x+8, y+CardH-22)
+		drawText(screen, card.Glyph, x+8, y+6, faceBody, white)
+		drawText(screen, card.Name, x+8, y+24, faceSmall, white)
+		drawText(screen, fmt.Sprintf("Cost: %d", card.Cost), x+8, y+CardH-22, faceSmall, white)
 		if card.Slow {
 			drawColoredText(screen, "slow", x+CardW-36, y+CardH-22, slowCol, 1)
 		}
@@ -570,10 +558,10 @@ func drawCardTooltip(screen *ebiten.Image, c *combat.Combat) {
 	vector.DrawFilledRect(screen, float32(tx), float32(ty), tipW, tipH, tooltipBg, true)
 	vector.StrokeRect(screen, float32(tx), float32(ty), tipW, tipH, 1, tooltipEdge, true)
 	header := fmt.Sprintf("%s %s   (cost %d)", card.Glyph, card.Name, card.Cost)
-	ebitenutil.DebugPrintAt(screen, header, tx+pad, ty+pad)
-	ebitenutil.DebugPrintAt(screen, card.Description, tx+pad, ty+pad+20)
+	drawText(screen, header, tx+pad, ty+pad, faceSmall, white)
+	drawText(screen, card.Description, tx+pad, ty+pad+18, faceSmall, white)
 	if ok, why := cardPlayable(c, card); !ok {
-		ebitenutil.DebugPrintAt(screen, "("+why+")", tx+pad, ty+pad+36)
+		drawText(screen, "("+why+")", tx+pad, ty+pad+34, faceSmall, yellow)
 	}
 }
 
@@ -589,9 +577,9 @@ func drawHUD(screen *ebiten.Image, v RunView) {
 		fmt.Sprintf("Deck: %d  Discard: %d  Total: %d", len(c.Draw), len(c.Discard), v.DeckSize),
 	}
 	for i, l := range lines {
-		ebitenutil.DebugPrintAt(screen, l, 880, 40+i*18)
+		drawText(screen, l, 880, 40+i*18, faceSmall, white)
 	}
-	ebitenutil.DebugPrintAt(screen, "Click card: play   |   Click radar: move   |   E or button: end turn", 40, 8)
+	drawText(screen, "Click card: play   |   Click radar: move   |   E or button: end turn", 40, 8, faceSmall, white)
 }
 
 func drawEndTurn(screen *ebiten.Image, c *combat.Combat) {
@@ -608,16 +596,13 @@ func drawEndTurn(screen *ebiten.Image, c *combat.Combat) {
 		}
 	}
 	vector.DrawFilledRect(screen, EndTurnX, EndTurnY, EndTurnW, EndTurnH, col, true)
-	ebitenutil.DebugPrintAt(screen, label, EndTurnX+12, EndTurnY+24)
+	centerText(screen, label, EndTurnX, EndTurnY+20, EndTurnW, faceBody, white)
 }
 
 func drawPhaseBanner(screen *ebiten.Image, c *combat.Combat) {
 	if c.Phase == combat.PhaseEnemy {
-		ebitenutil.DebugPrintAt(screen, "(enemy turn)", 560, 700)
+		drawText(screen, "(enemy turn)", 560, 700, faceBody, white)
 	}
-	_ = green
-	_ = white
-	_ = yellow
 }
 
 // --- Reward screen ---
@@ -638,7 +623,7 @@ func skipBtnRect() (int, int) {
 func drawRewardOverlay(screen *ebiten.Image, v RunView) {
 	// Dim backdrop.
 	vector.DrawFilledRect(screen, 0, 0, ScreenW, ScreenH, color.RGBA{0, 0, 0, 180}, true)
-	ebitenutil.DebugPrintAt(screen, "Choose a rune to add to your deck.", (ScreenW/2)-130, RewardTopY-40)
+	drawText(screen, "Choose a rune to add to your deck.", (ScreenW/2)-130, RewardTopY-40, faceBody, white)
 
 	mx, my := ebiten.CursorPosition()
 	for i, card := range v.Rewards {
@@ -651,11 +636,10 @@ func drawRewardOverlay(screen *ebiten.Image, v RunView) {
 		vector.DrawFilledRect(screen, float32(x), float32(y), RewardCardW, RewardCardH, bg, true)
 		vector.StrokeRect(screen, float32(x), float32(y), RewardCardW, RewardCardH, 1, tooltipEdge, true)
 
-		ebitenutil.DebugPrintAt(screen, card.Glyph, x+12, y+12)
-		ebitenutil.DebugPrintAt(screen, card.Name, x+12, y+34)
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Cost: %d", card.Cost), x+12, y+58)
-		// Wrap description across lines.
-		drawWrappedText(screen, card.Description, x+12, y+90, RewardCardW-24, 16)
+		drawText(screen, card.Glyph, x+12, y+12, faceBody, white)
+		drawText(screen, card.Name, x+12, y+34, faceBody, white)
+		drawText(screen, fmt.Sprintf("Cost: %d", card.Cost), x+12, y+58, faceSmall, white)
+		drawWrapped(screen, card.Description, x+12, y+82, float64(RewardCardW-24), 18, faceSmall, white)
 	}
 
 	sx, sy := skipBtnRect()
@@ -664,55 +648,9 @@ func drawRewardOverlay(screen *ebiten.Image, v RunView) {
 		bg = cardBgHi
 	}
 	vector.DrawFilledRect(screen, float32(sx), float32(sy), SkipBtnW, SkipBtnH, bg, true)
-	ebitenutil.DebugPrintAt(screen, "SKIP — take nothing", sx+30, sy+18)
+	centerText(screen, "SKIP — take nothing", sx, sy+14, SkipBtnW, faceBody, white)
 }
 
-// drawWrappedText is a quick word-wrap using the debug font's ~7px-per-char.
-func drawWrappedText(screen *ebiten.Image, s string, x, y, maxW, lineH int) {
-	const charW = 7
-	maxChars := maxW / charW
-	if maxChars < 1 {
-		maxChars = 1
-	}
-	words := splitWords(s)
-	line := ""
-	cy := y
-	for _, w := range words {
-		candidate := w
-		if line != "" {
-			candidate = line + " " + w
-		}
-		if len(candidate) > maxChars && line != "" {
-			ebitenutil.DebugPrintAt(screen, line, x, cy)
-			cy += lineH
-			line = w
-		} else {
-			line = candidate
-		}
-	}
-	if line != "" {
-		ebitenutil.DebugPrintAt(screen, line, x, cy)
-	}
-}
-
-func splitWords(s string) []string {
-	out := []string{}
-	cur := ""
-	for _, r := range s {
-		if r == ' ' || r == '\n' {
-			if cur != "" {
-				out = append(out, cur)
-				cur = ""
-			}
-		} else {
-			cur += string(r)
-		}
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
-}
 
 // HitReward returns the index of the reward card at (mx,my), or -1.
 func HitReward(rewards []runes.Card, mx, my int) int {
@@ -751,8 +689,7 @@ func classOptions() []classOption {
 			class: runes.ClassElementalist,
 			title: "Elementalist",
 			description: []string{
-				"Exploits the type system.",
-				"Match damage type to enemy weakness for 1.5x damage.",
+				"Exploits the type system. Match damage type to enemy weakness for 1.5x damage.",
 				"",
 				"Defense: Earth Armor (cannot move once cast).",
 				"No mobility runes — stand and burn.",
@@ -764,26 +701,22 @@ func classOptions() []classOption {
 			class: runes.ClassMesmer,
 			title: "Mesmer",
 			description: []string{
-				"Reads enemy intent. Punishes both",
-				"aggression and passivity.",
+				"Reads enemy intent. Punishes both aggression and passivity.",
 				"",
 				"Defense: positioning and delay.",
 				"Aphyr stalls; Move keeps distance.",
 				"",
-				"Starter: 2 Aphyr, 3 Isa-aggressive,",
-				"3 Isa-passive, 2 Move.",
+				"Starter: 2 Aphyr, 3 Isa-aggressive, 3 Isa-passive, 2 Move.",
 			},
 		},
 		{
 			class: runes.ClassNecromancer,
 			title: "Necromancer",
 			description: []string{
-				"Summons minions as persistent",
-				"processes that occupy the radar.",
+				"Summons minions as persistent processes that occupy the radar.",
 				"",
 				"Defense: minions intercept aggression.",
-				"Drain heals; sacrifice burns minion HP",
-				"for damage.",
+				"Drain heals; sacrifice burns minion HP for damage.",
 				"",
 				"Starter: 4 Thurisaz, 3 Maðr, 3 Ár.",
 			},
@@ -801,7 +734,13 @@ func classCardRect(i int) (int, int) {
 }
 
 func drawClassSelect(screen *ebiten.Image) {
-	ebitenutil.DebugPrintAt(screen, "NAND2RUNES — choose your class", ScreenW/2-110, 100)
+	centerText(screen, "NAND2RUNES — choose your class", 0, 90, ScreenW, faceTitle, white)
+
+	const (
+		pad      = 18
+		textMaxW = float64(classCardW - pad*2)
+		lineH    = 20
+	)
 
 	mx, my := ebiten.CursorPosition()
 	for i, opt := range classOptions() {
@@ -812,9 +751,14 @@ func drawClassSelect(screen *ebiten.Image) {
 		}
 		vector.DrawFilledRect(screen, float32(x), float32(y), classCardW, classCardH, bg, true)
 		vector.StrokeRect(screen, float32(x), float32(y), classCardW, classCardH, 1, tooltipEdge, true)
-		ebitenutil.DebugPrintAt(screen, opt.title, x+18, y+18)
-		for j, line := range opt.description {
-			ebitenutil.DebugPrintAt(screen, line, x+18, y+60+j*20)
+		drawText(screen, opt.title, x+pad, y+pad, faceTitle, white)
+		cy := y + 56
+		for _, line := range opt.description {
+			if line == "" {
+				cy += lineH / 2
+				continue
+			}
+			cy = drawWrapped(screen, line, x+pad, cy, textMaxW, lineH, faceSmall, white)
 		}
 	}
 }
@@ -838,7 +782,7 @@ func drawEndOverlay(screen *ebiten.Image, v RunView, won bool) {
 	if !won {
 		msg = "RUN FAILED"
 	}
-	ebitenutil.DebugPrintAt(screen, msg, ScreenW/2-40, ScreenH/2-20)
-	ebitenutil.DebugPrintAt(screen, fmt.Sprintf("Final HP: %d/%d   Deck size: %d", v.PlayerHP, v.MaxHP, v.DeckSize), ScreenW/2-110, ScreenH/2+10)
-	ebitenutil.DebugPrintAt(screen, "Close the window to exit.", ScreenW/2-80, ScreenH/2+40)
+	centerText(screen, msg, 0, ScreenH/2-24, ScreenW, faceTitle, white)
+	centerText(screen, fmt.Sprintf("Final HP: %d/%d   Deck size: %d", v.PlayerHP, v.MaxHP, v.DeckSize), 0, ScreenH/2+10, ScreenW, faceBody, white)
+	centerText(screen, "Close the window to exit.", 0, ScreenH/2+38, ScreenW, faceSmall, white)
 }
