@@ -310,10 +310,9 @@ func (c *Combat) drawUpTo(n int) {
 	}
 }
 
-// StageCard adds a rune to the spell being composed this turn. Only one
-// spell may be cast per turn, so once SpellCast is true, no more staging.
-// Placement-required cards return (true, true) and stay pending until
-// ConfirmPlacement; instant-effect cards stage immediately.
+// StageCard adds a rune to the spell being composed this turn. Energy is NOT
+// deducted at stage time — only at cast time. Staging only verifies the spell
+// CAN be afforded (sum of staged costs + this card <= Energy).
 func (c *Combat) StageCard(i int) (staged, needsPlacement bool) {
 	if c.Phase != PhasePlayer || c.SpellCast || c.PendingCardIdx >= 0 {
 		return false, false
@@ -322,7 +321,7 @@ func (c *Combat) StageCard(i int) (staged, needsPlacement bool) {
 		return false, false
 	}
 	card := c.Hand[i]
-	if card.Cost > c.Energy {
+	if c.TotalStagedCost()+card.Cost > c.Energy {
 		return false, false
 	}
 	if ok, _ := c.CanAddToStage(card); !ok {
@@ -337,10 +336,20 @@ func (c *Combat) StageCard(i int) (staged, needsPlacement bool) {
 		c.PendingCardIdx = i
 		return true, true
 	}
-	c.Energy -= card.Cost
 	c.Stage = append(c.Stage, StagedCard{Card: card})
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
 	return true, false
+}
+
+// TotalStagedCost is the sum of base costs of every staged rune. Does NOT
+// include modifier-driven resolve-time costs (e.g. Disperse), which are paid
+// when the spell actually casts.
+func (c *Combat) TotalStagedCost() int {
+	sum := 0
+	for _, sc := range c.Stage {
+		sum += sc.Card.Cost
+	}
+	return sum
 }
 
 // CanAddToStage enforces the spell-composition grammar:
@@ -377,7 +386,8 @@ func (c *Combat) CanAddToStage(card runes.Card) (bool, string) {
 	return true, ""
 }
 
-// ConfirmPlacement stages the pending card with the chosen world target.
+// ConfirmPlacement stages the pending card with the chosen world target. As
+// with StageCard, no energy is deducted — that happens at cast time.
 func (c *Combat) ConfirmPlacement(x, y float64) bool {
 	if c.PendingCardIdx < 0 || c.PendingCardIdx >= len(c.Hand) {
 		c.PendingCardIdx = -1
@@ -385,7 +395,6 @@ func (c *Combat) ConfirmPlacement(x, y float64) bool {
 	}
 	i := c.PendingCardIdx
 	card := c.Hand[i]
-	c.Energy -= card.Cost
 	c.Stage = append(c.Stage, StagedCard{Card: card, PlaceX: x, PlaceY: y})
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
 	c.PendingCardIdx = -1
@@ -415,15 +424,14 @@ func (c *Combat) Dash() bool {
 	return true
 }
 
-// UnstageLast returns the most recently staged rune to the player's hand,
-// refunding its energy. Used as a one-step undo before the spell is cast.
+// UnstageLast returns the most recently staged rune to the player's hand.
+// No energy refund needed — costs are only paid at cast time.
 func (c *Combat) UnstageLast() bool {
 	if c.SpellCast || len(c.Stage) == 0 {
 		return false
 	}
 	last := c.Stage[len(c.Stage)-1]
 	c.Stage = c.Stage[:len(c.Stage)-1]
-	c.Energy += last.Card.Cost
 	c.Hand = append(c.Hand, last.Card)
 	return true
 }
@@ -439,13 +447,21 @@ func (c *Combat) StageIsSlow() bool {
 	return false
 }
 
-// CastSpell resolves all staged runes. If any are Slow, the spell is queued
-// to resolve after the upcoming enemy phase and the player turn ends
-// immediately. Movement budget is unaffected by casting itself.
+// CastSpell pays the spell's base cost (sum of staged runes), then resolves.
+// If any rune is Slow, the spell is queued to resolve after the upcoming enemy
+// phase; the player turn ends immediately. Modifier-driven runtime costs (e.g.
+// Disperse) are paid inside the Core's Effect via SpendEnergy.
 func (c *Combat) CastSpell() bool {
 	if c.Phase != PhasePlayer || c.SpellCast || len(c.Stage) == 0 {
 		return false
 	}
+	cost := c.TotalStagedCost()
+	if c.Energy < cost {
+		// Stage-time validation should make this unreachable; defensive only.
+		return false
+	}
+	c.Energy -= cost
+
 	names := make([]string, 0, len(c.Stage))
 	for _, sc := range c.Stage {
 		names = append(names, sc.Card.Name)
@@ -995,6 +1011,42 @@ func (c *Combat) nearestEnemyInRange(maxRange float64) *enemies.Enemy {
 
 func (c *Combat) HasTargetInRange(maxRange float64) bool {
 	return c.nearestEnemyInRange(maxRange) != nil
+}
+
+// CountTargetsInRange returns how many living enemies are within maxRange of
+// the player with line-of-sight. Cone is ignored — matches DamageAll's filter.
+// Used by Disperse-modified spells to compute per-target energy cost.
+func (c *Combat) CountTargetsInRange(maxRange float64) int {
+	n := 0
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		if maxRange > 0 {
+			d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
+			if d > maxRange {
+				continue
+			}
+		}
+		if !c.hasLOS(c.Player.X, c.Player.Y, e.X, e.Y) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// SpendEnergy deducts amount energy if available, returning false if the
+// player doesn't have enough (in which case no energy is spent).
+func (c *Combat) SpendEnergy(amount int) bool {
+	if amount < 0 {
+		return false
+	}
+	if c.Energy < amount {
+		return false
+	}
+	c.Energy -= amount
+	return true
 }
 
 func (c *Combat) DamageNearest(amount int, dt runes.DamageType, maxRange float64) {

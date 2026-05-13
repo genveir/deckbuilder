@@ -540,12 +540,13 @@ func cardRect(i int) (int, int) {
 
 // cardPlayable evaluates whether a hand card can be staged right now,
 // accounting for spell-already-cast, energy, composition, and CanPlay
-// constraints.
+// constraints. Energy is checked against the post-staging projection
+// (Energy - already-staged cost).
 func cardPlayable(c *combat.Combat, card runes.Card) (bool, string) {
 	if c.SpellCast {
 		return false, "spell already cast this turn"
 	}
-	if card.Cost > c.Energy {
+	if c.TotalStagedCost()+card.Cost > c.Energy {
 		return false, "not enough energy"
 	}
 	if ok, why := c.CanAddToStage(card); !ok {
@@ -618,6 +619,16 @@ func drawCardTooltip(screen *ebiten.Image, c *combat.Combat) {
 	}
 }
 
+// energyLine renders "Energy: X/Y" plus the currently-staged cost when the
+// player is composing a spell, so they see how much paying for it will leave.
+func energyLine(c *combat.Combat) string {
+	staged := c.TotalStagedCost()
+	if staged == 0 {
+		return fmt.Sprintf("Energy: %d/%d", c.Energy, c.MaxEnergy)
+	}
+	return fmt.Sprintf("Energy: %d/%d  (-%d staged → %d after)", c.Energy, c.MaxEnergy, staged, c.Energy-staged)
+}
+
 func drawHUD(screen *ebiten.Image, v RunView) {
 	c := v.Combat
 	lines := []string{
@@ -625,7 +636,7 @@ func drawHUD(screen *ebiten.Image, v RunView) {
 		fmt.Sprintf("Encounter %d / %d", v.EncounterIdx+1, v.TotalEncounters),
 		fmt.Sprintf("HP: %d/%d", c.PlayerHP, c.PlayerMaxHP),
 		fmt.Sprintf("Armor: %d", c.PlayerArmor),
-		fmt.Sprintf("Energy: %d/%d", c.Energy, c.MaxEnergy),
+		energyLine(c),
 		fmt.Sprintf("Move: %.0f", c.MovementBudget),
 		fmt.Sprintf("Deck: %d  Discard: %d  Total: %d", len(c.Draw), len(c.Discard), v.DeckSize),
 	}

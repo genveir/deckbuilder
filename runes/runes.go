@@ -1,5 +1,7 @@
 package runes
 
+import "fmt"
+
 type DamageType int
 
 const (
@@ -73,6 +75,11 @@ type World interface {
 	ConsumeAllMovement()
 	NearestIntendsAttack(maxRange float64) bool
 
+	// Disperse-modifier surface: count valid AOE targets and try to spend
+	// energy at resolve time.
+	CountTargetsInRange(maxRange float64) int
+	SpendEnergy(amount int) bool
+
 	SummonMinion(power, hp int)
 	SummonMinionAt(power, hp int, x, y float64)
 	HasMinion() bool
@@ -96,6 +103,54 @@ func requireTargetInRange(r float64) func(World) (bool, string) {
 			return false, "no target in range"
 		}
 		return true, ""
+	}
+}
+
+// elementalAttack builds a single-target damage rune that respects the
+// "Disperse" modifier. With Disperse attached, the rune switches to AOE
+// (DamageAll) and consumes +1 energy per enemy hit at resolve time; if there
+// isn't enough energy, the spell fizzles.
+func elementalAttack(name, glyph, desc string, cost, amount int, dt DamageType, r float64, slow bool) Card {
+	return Card{
+		Name:        name,
+		Glyph:       glyph,
+		Cost:        cost,
+		Range:       r,
+		Role:        RoleCore,
+		Family:      "Elemental",
+		Slow:        slow,
+		Description: desc,
+		Effect: func(w World) {
+			if w.HasModifier("Disperse") {
+				n := w.CountTargetsInRange(r)
+				if n == 0 {
+					w.LogNote(fmt.Sprintf("%s fizzles: no Disperse targets", name))
+					return
+				}
+				if !w.SpendEnergy(n) {
+					w.LogNote(fmt.Sprintf("%s fizzles: Disperse needs %d energy", name, n))
+					return
+				}
+				w.DamageAll(amount, dt, r)
+				return
+			}
+			w.DamageNearest(amount, dt, r)
+		},
+		CanPlay: requireTargetInRange(r),
+	}
+}
+
+// Disperse is a modifier rune that turns an Elemental single-target attack
+// into an AOE, costing +1 energy per enemy hit at resolve. Insufficient
+// energy fizzles the entire spell.
+func Disperse() Card {
+	return Card{
+		Name:           "Disperse",
+		Glyph:          "✺",
+		Cost:           0,
+		Role:           RoleModifier,
+		ModifiesFamily: "Elemental",
+		Description:    "Modifier (Elemental): hit every enemy in range with LOS. Costs +1 energy per target at cast — fizzles if you can't pay.",
 	}
 }
 
@@ -144,15 +199,9 @@ type Card struct {
 
 func FireAttack() Card {
 	const r = 200
-	return Card{
-		Name:        "Fire Attack",
-		Glyph:       "ᚾ",
-		Cost:        1,
-		Range:       r,
-		Description: "Deal 6 fire damage to the nearest enemy in range.",
-		Effect:      func(w World) { w.DamageNearest(6, Fire, r) },
-		CanPlay:     requireTargetInRange(r),
-	}
+	return elementalAttack("Fire Attack", "ᚾ",
+		"Deal 6 fire damage to the nearest enemy in range.",
+		1, 6, Fire, r, false)
 }
 
 func EarthArmor() Card {
@@ -176,15 +225,9 @@ func EarthArmor() Card {
 
 func FrostAttack() Card {
 	const r = 200
-	return Card{
-		Name:        "Frost Attack",
-		Glyph:       "ᛁ",
-		Cost:        1,
-		Range:       r,
-		Description: "Deal 5 frost damage to the nearest enemy in range.",
-		Effect:      func(w World) { w.DamageNearest(5, Frost, r) },
-		CanPlay:     requireTargetInRange(r),
-	}
+	return elementalAttack("Frost Attack", "ᛁ",
+		"Deal 5 frost damage to the nearest enemy in range.",
+		1, 5, Frost, r, false)
 }
 
 func Move() Card {
@@ -309,42 +352,16 @@ func Ar() Card {
 
 func StrongFireAttack() Card {
 	const r = 200
-	return Card{
-		Name:        "Strong Fire Attack",
-		Glyph:       "ᚾ+",
-		Cost:        1,
-		Range:       r,
-		Description: "Deal 9 fire damage to the nearest enemy in range.",
-		Effect:      func(w World) { w.DamageNearest(9, Fire, r) },
-		CanPlay:     requireTargetInRange(r),
-	}
+	return elementalAttack("Strong Fire Attack", "ᚾ+",
+		"Deal 9 fire damage to the nearest enemy in range.",
+		1, 9, Fire, r, false)
 }
 
 func GreaterFireAttack() Card {
 	const r = 250
-	return Card{
-		Name:        "Greater Fire Attack",
-		Glyph:       "ᚾ++",
-		Cost:        2,
-		Range:       r,
-		Description: "Deal 14 fire damage to the nearest enemy in range. Slow.",
-		Slow:        true,
-		Effect:      func(w World) { w.DamageNearest(14, Fire, r) },
-		CanPlay:     requireTargetInRange(r),
-	}
-}
-
-func Firestorm() Card {
-	const r = 250
-	return Card{
-		Name:        "Firestorm",
-		Glyph:       "ᚠ",
-		Cost:        2,
-		Range:       r,
-		Description: "Deal 4 fire damage to every enemy in range with line-of-sight.",
-		Effect:      func(w World) { w.DamageAll(4, Fire, r) },
-		CanPlay:     requireTargetInRange(r),
-	}
+	return elementalAttack("Greater Fire Attack", "ᚾ++",
+		"Deal 14 fire damage to the nearest enemy in range. Slow.",
+		2, 14, Fire, r, true)
 }
 
 func StoneSkin() Card {
@@ -534,9 +551,9 @@ func RewardPool(c Class) []Card {
 		return []Card{
 			StrongFireAttack(),
 			GreaterFireAttack(),
-			Firestorm(),
 			StoneSkin(),
 			WallOfStone(),
+			Disperse(),
 		}
 	}
 }
