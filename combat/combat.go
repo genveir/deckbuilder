@@ -556,7 +556,6 @@ func (c *Combat) chooseTarget(e *enemies.Enemy) aggroTarget {
 // Ranged spells ignore walls.
 func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 	t := c.chooseTarget(e)
-	dist := math.Hypot(e.X-t.x, e.Y-t.y)
 	apply := func(dmg int, dt runes.DamageType) {
 		if t.isMinion() {
 			t.minion.HP -= dmg
@@ -588,37 +587,41 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 		e.Y += dy / n * s
 	}
 
-	if e.RangedPower > 0 {
-		inRange := e.MaxRange == 0 || dist <= e.MaxRange
-		canCast := inRange && c.hasLOS(e.X, e.Y, t.x, t.y)
-		if canCast {
+	// Turn options, in priority order:
+	//   1) act from current position (attack / cast)
+	//   2) move 1x and act (move-attack / move-cast)
+	//   3) dash 2x (no attack)
+	//   4) wall-smash fallback
+	dashStep := e.MoveSpeed * 2
+
+	if c.enemyCanActFrom(e, e.X, e.Y, t) {
+		if e.RangedPower > 0 {
 			apply(e.RangedPower, e.RangedType)
 			e.Intent = "cast"
 		} else {
-			e.Intent = "advance"
-		}
-		// Drift forward (path-aware) until in melee range.
-		if dist > e.MeleeRange {
-			if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
-				nx, ny := c.smoothPathStep(e.X, e.Y, path, e.MoveSpeed)
-				moveTowardPoint(nx, ny, e.MoveSpeed)
-			}
+			apply(e.AttackPower, runes.Physical)
+			e.Intent = "attacked"
 		}
 		return
 	}
 
-	// Melee: can we hit the target right now? Direct LOS + range required.
-	if dist <= e.MeleeRange && c.hasLOS(e.X, e.Y, t.x, t.y) {
-		apply(e.AttackPower, runes.Physical)
-		e.Intent = "attacked"
+	if ok, nx, ny := c.enemyCanMoveThenAct(e, t); ok {
+		e.X, e.Y = nx, ny
+		if e.RangedPower > 0 {
+			apply(e.RangedPower, e.RangedType)
+			e.Intent = "move + cast"
+		} else {
+			apply(e.AttackPower, runes.Physical)
+			e.Intent = "move + attack"
+		}
 		return
 	}
 
-	// Try to path around walls.
+	// Out of attack reach this turn — dash.
 	if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
-		nx, ny := c.smoothPathStep(e.X, e.Y, path, e.MoveSpeed)
-		moveTowardPoint(nx, ny, e.MoveSpeed)
-		e.Intent = "approached"
+		nx, ny := c.smoothPathStep(e.X, e.Y, path, dashStep)
+		moveTowardPoint(nx, ny, dashStep)
+		e.Intent = "dash"
 		return
 	}
 
@@ -642,10 +645,10 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 			}
 			return
 		}
-		step := math.Min(distToWall-e.MeleeRange, e.MoveSpeed)
+		step := math.Min(distToWall-e.MeleeRange, dashStep)
 		if step > 0 {
 			moveTowardPoint(cpx, cpy, step)
-			e.Intent = "approaching wall"
+			e.Intent = "dash to wall"
 			return
 		}
 	}
@@ -657,6 +660,42 @@ func (c *Combat) runEnemyProgram(e *enemies.Enemy) {
 func (c *Combat) hasLOS(x1, y1, x2, y2 float64) bool {
 	w, _, _ := c.firstWallHit(x1, y1, x2, y2)
 	return w == nil
+}
+
+// enemyCanActFrom reports whether the enemy could attack/cast at target t from
+// the hypothetical position (px, py).
+func (c *Combat) enemyCanActFrom(e *enemies.Enemy, px, py float64, t aggroTarget) bool {
+	d := math.Hypot(px-t.x, py-t.y)
+	if e.RangedPower > 0 {
+		if e.MaxRange > 0 && d > e.MaxRange {
+			return false
+		}
+		return c.hasLOS(px, py, t.x, t.y)
+	}
+	return d <= e.MeleeRange && c.hasLOS(px, py, t.x, t.y)
+}
+
+// enemyCanMoveThenAct simulates a single normal-speed move along the A* path
+// and reports whether the enemy could act from the resulting position.
+func (c *Combat) enemyCanMoveThenAct(e *enemies.Enemy, t aggroTarget) (bool, float64, float64) {
+	path := c.findPath(e.X, e.Y, t.x, t.y)
+	if len(path) < 2 {
+		return false, e.X, e.Y
+	}
+	nx, ny := c.smoothPathStep(e.X, e.Y, path, e.MoveSpeed)
+	ddx := nx - e.X
+	ddy := ny - e.Y
+	n := math.Hypot(ddx, ddy)
+	if n == 0 {
+		return false, e.X, e.Y
+	}
+	s := math.Min(e.MoveSpeed, n)
+	px := e.X + ddx/n*s
+	py := e.Y + ddy/n*s
+	if c.enemyCanActFrom(e, px, py, t) {
+		return true, px, py
+	}
+	return false, e.X, e.Y
 }
 
 // smoothPathStep walks the path from (sx,sy) and returns the world target the
@@ -707,22 +746,25 @@ func (c *Combat) refreshIntents() {
 		if t.isMinion() {
 			suffix = " minion"
 		}
-		if e.RangedPower > 0 {
-			inRange := e.MaxRange == 0 || dist <= e.MaxRange
-			canCast := inRange && c.hasLOS(e.X, e.Y, t.x, t.y)
-			if canCast {
+		_ = dist
+		if c.enemyCanActFrom(e, e.X, e.Y, t) {
+			if e.RangedPower > 0 {
 				e.Intent = fmt.Sprintf("cast %s%s (%d)", e.RangedType, suffix, e.RangedPower)
 			} else {
-				e.Intent = "advance"
+				e.Intent = fmt.Sprintf("attack%s (%d)", suffix, e.AttackPower)
 			}
 			continue
 		}
-		if dist <= e.MeleeRange && c.hasLOS(e.X, e.Y, t.x, t.y) {
-			e.Intent = fmt.Sprintf("attack%s (%d)", suffix, e.AttackPower)
+		if ok, _, _ := c.enemyCanMoveThenAct(e, t); ok {
+			if e.RangedPower > 0 {
+				e.Intent = fmt.Sprintf("move + cast %s%s (%d)", e.RangedType, suffix, e.RangedPower)
+			} else {
+				e.Intent = fmt.Sprintf("move + attack%s (%d)", suffix, e.AttackPower)
+			}
 			continue
 		}
 		if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
-			e.Intent = "approach" + suffix
+			e.Intent = "dash"
 			continue
 		}
 		if blocker, _, _ := c.firstWallHit(e.X, e.Y, t.x, t.y); blocker != nil {

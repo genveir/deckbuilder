@@ -23,7 +23,7 @@ func NewGoblin(x, y float64) *Enemy {
 		HP:          22, MaxHP: 22,
 		X: x, Y: y,
 		MeleeRange:  40,
-		MoveSpeed:   100,
+		MoveSpeed:   60,
 		AttackPower: 6,
 		Weakness:    runes.Frost,
 	}
