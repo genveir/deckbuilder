@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	EnergyAtTurn1    = 1
+	EnergyAtTurn1    = 2
 	EnergyCap        = 5
 	HandSize         = 5
-	BaseMovement     = 30
+	BaseMovement     = 40
 	DefaultMaxHP     = 70
 	EnemyTurnStepDur = 0.4 // seconds per enemy action
 )
@@ -108,6 +108,9 @@ type Combat struct {
 	// SpellCast is true once the spell has been cast — no more staging this turn.
 	Stage     []StagedCard
 	SpellCast bool
+	// Dashed is set when the player has used their once-per-turn dash. The
+	// dash adds BaseMovement to the budget and forfeits the spell action.
+	Dashed bool
 
 	// pendingSlowSpell holds a slow-cast spell awaiting resolution after the
 	// enemy phase. Set when the player casts a spell containing any Slow rune.
@@ -237,6 +240,7 @@ func (c *Combat) startPlayerTurn() {
 	c.hasMoved = false
 	c.Stage = c.Stage[:0]
 	c.SpellCast = false
+	c.Dashed = false
 	c.refreshIntents()
 	c.drawUpTo(HandSize)
 	c.Phase = PhasePlayer
@@ -389,6 +393,27 @@ func (c *Combat) ConfirmPlacement(x, y float64) bool {
 }
 
 func (c *Combat) CancelPlacement() { c.PendingCardIdx = -1 }
+
+// CanDash reports whether the player may dash this turn — no staged runes,
+// no spell cast yet, no prior dash.
+func (c *Combat) CanDash() bool {
+	return c.Phase == PhasePlayer && !c.Dashed && !c.SpellCast &&
+		len(c.Stage) == 0 && c.PendingCardIdx < 0
+}
+
+// Dash grants +BaseMovement movement budget for the turn and forfeits the
+// spell action (no staging or casting afterwards). Returns false if not
+// available.
+func (c *Combat) Dash() bool {
+	if !c.CanDash() {
+		return false
+	}
+	c.MovementBudget += BaseMovement
+	c.Dashed = true
+	c.SpellCast = true
+	c.addLog(LogPlayer, "Dash (+%d movement, no spell)", int(BaseMovement))
+	return true
+}
 
 // UnstageLast returns the most recently staged rune to the player's hand,
 // refunding its energy. Used as a one-step undo before the spell is cast.
@@ -1085,9 +1110,9 @@ func (c *Combat) ConsumeAllMovement() {
 }
 
 // NearestIntendsAttack returns true if the cone-nearest living enemy within
-// maxRange (0 = unlimited) will deal damage to the player on its next turn.
-// Targets the same enemy DamageNearest would pick, so Isa-family rules align
-// with the rune's actual hit.
+// maxRange (0 = unlimited) will deal damage to the player on its next turn —
+// either by acting from its current position OR by moving and attacking
+// (matching the enemy decision tree in runEnemyProgram).
 func (c *Combat) NearestIntendsAttack(maxRange float64) bool {
 	target := c.nearestEnemyInRange(maxRange)
 	if target == nil {
@@ -1100,10 +1125,13 @@ func (c *Combat) NearestIntendsAttack(maxRange float64) bool {
 	if t.isMinion() {
 		return false
 	}
-	if target.RangedPower > 0 {
+	if c.enemyCanActFrom(target, target.X, target.Y, t) {
 		return true
 	}
-	return math.Hypot(target.X-c.Player.X, target.Y-c.Player.Y) <= target.MeleeRange
+	if ok, _, _ := c.enemyCanMoveThenAct(target, t); ok {
+		return true
+	}
+	return false
 }
 
 func (c *Combat) DelayNearest(turns int, maxRange float64) {

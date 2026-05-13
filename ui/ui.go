@@ -28,6 +28,9 @@ const (
 	EndTurnX, EndTurnY  = 1100, 660
 	EndTurnW, EndTurnH = 140, 60
 
+	DashBtnX, DashBtnY  = 1100, 590
+	DashBtnW, DashBtnH = 140, 60
+
 	StageY      = 470
 	StageCardW  = 100
 	StageCardH  = 100
@@ -162,6 +165,7 @@ func drawCombatScreen(screen *ebiten.Image, v RunView) {
 	drawHand(screen, c)
 	drawHUD(screen, v)
 	drawLog(screen, c)
+	drawDashBtn(screen, c)
 	drawEndTurn(screen, c)
 	drawCardTooltip(screen, c)
 	drawPhaseBanner(screen, c)
@@ -629,6 +633,21 @@ func drawHUD(screen *ebiten.Image, v RunView) {
 		drawText(screen, l, 880, 40+i*18, faceSmall, white)
 	}
 	drawText(screen, "Click card: play   |   Click radar: move   |   E or button: end turn", 40, 8, faceSmall, white)
+}
+
+func drawDashBtn(screen *ebiten.Image, c *combat.Combat) {
+	col := cardBg
+	if !c.CanDash() {
+		col = cardBgDim
+	}
+	vector.DrawFilledRect(screen, DashBtnX, DashBtnY, DashBtnW, DashBtnH, col, true)
+	drawText(screen, "DASH (D)", DashBtnX+30, DashBtnY+24, faceSmall, white)
+}
+
+// HitDashBtn returns whether (mx, my) is over the Dash button.
+func HitDashBtn(mx, my int) bool {
+	return mx >= DashBtnX && mx < DashBtnX+DashBtnW &&
+		my >= DashBtnY && my < DashBtnY+DashBtnH
 }
 
 func drawEndTurn(screen *ebiten.Image, c *combat.Combat) {

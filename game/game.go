@@ -68,6 +68,8 @@ func (g *Game) handleCombatInput() {
 			c.StageCard(i)
 		} else if ui.HitEndTurn(mx, my) {
 			g.advanceTurn(c)
+		} else if ui.HitDashBtn(mx, my) {
+			c.Dash()
 		} else if rx, ry, ok := ui.HitRadar(mx, my); ok {
 			c.MoveTowards(rx, ry)
 		}
@@ -77,6 +79,9 @@ func (g *Game) handleCombatInput() {
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyE) {
 		g.advanceTurn(c)
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyD) {
+		c.Dash()
 	}
 }
 
