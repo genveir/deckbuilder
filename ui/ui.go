@@ -96,6 +96,7 @@ var (
 	rangeTargetCol = color.RGBA{255, 200, 130, 220}
 	coneCol        = color.RGBA{120, 220, 255, 18}
 	coneEdgeCol    = color.RGBA{120, 220, 255, 60}
+	predictCol     = color.RGBA{230, 90, 90, 110}
 
 	logBg          = color.RGBA{16, 18, 26, 220}
 	logEdge        = color.RGBA{70, 80, 110, 255}
@@ -429,6 +430,16 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 	}
 
 	for _, e := range c.Enemies {
+		if e.HP > 0 {
+			if px, py, moves := c.PredictMove(e); moves {
+				ex := float32(RadarCX + (e.X - c.Player.X))
+				ey := float32(RadarCY + (e.Y - c.Player.Y))
+				gx := float32(RadarCX + (px - c.Player.X))
+				gy := float32(RadarCY + (py - c.Player.Y))
+				vector.StrokeLine(screen, ex, ey, gx, gy, 1, predictCol, true)
+				vector.StrokeCircle(screen, gx, gy, 9, 1, predictCol, true)
+			}
+		}
 		ex := float32(RadarCX + (e.X - c.Player.X))
 		ey := float32(RadarCY + (e.Y - c.Player.Y))
 		col := enemyColor

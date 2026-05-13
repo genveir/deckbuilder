@@ -835,6 +835,52 @@ func (c *Combat) enemyCanActFrom(e *enemies.Enemy, px, py float64, t aggroTarget
 	return d <= e.MeleeRange && c.hasLOS(px, py, t.x, t.y)
 }
 
+// PredictMove returns the world position the enemy is planning to move to
+// this turn, plus a flag indicating whether the enemy actually moves. Mirrors
+// the decision tree in runEnemyProgram so the UI can show movement intent.
+func (c *Combat) PredictMove(e *enemies.Enemy) (float64, float64, bool) {
+	if e.HP <= 0 || e.Stunned > 0 {
+		return e.X, e.Y, false
+	}
+	t := c.chooseTarget(e)
+	if c.enemyCanActFrom(e, e.X, e.Y, t) {
+		return e.X, e.Y, false
+	}
+	if ok, nx, ny := c.enemyCanMoveThenAct(e, t); ok {
+		return nx, ny, true
+	}
+	dashStep := e.MoveSpeed * 2
+	if path := c.findPath(e.X, e.Y, t.x, t.y); len(path) >= 2 {
+		nx, ny := c.smoothPathStep(e.X, e.Y, path, dashStep)
+		ddx := nx - e.X
+		ddy := ny - e.Y
+		n := math.Hypot(ddx, ddy)
+		if n == 0 {
+			return e.X, e.Y, false
+		}
+		s := math.Min(dashStep, n)
+		return e.X + ddx/n*s, e.Y + ddy/n*s, true
+	}
+	// Wall fallback: approach if reachable, else stand still.
+	if blocker, _, _ := c.firstWallHit(e.X, e.Y, t.x, t.y); blocker != nil {
+		cpx, cpy := closestPointOnSegment(e.X, e.Y, blocker.X1, blocker.Y1, blocker.X2, blocker.Y2)
+		distToWall := math.Hypot(cpx-e.X, cpy-e.Y)
+		if distToWall <= e.MeleeRange {
+			return e.X, e.Y, false
+		}
+		step := math.Min(distToWall-e.MeleeRange, dashStep)
+		if step > 0 {
+			ddx := cpx - e.X
+			ddy := cpy - e.Y
+			n := math.Hypot(ddx, ddy)
+			if n > 0 {
+				return e.X + ddx/n*step, e.Y + ddy/n*step, true
+			}
+		}
+	}
+	return e.X, e.Y, false
+}
+
 // enemyCanMoveThenAct simulates a single normal-speed move along the A* path
 // and reports whether the enemy could act from the resulting position.
 func (c *Combat) enemyCanMoveThenAct(e *enemies.Enemy, t aggroTarget) (bool, float64, float64) {
