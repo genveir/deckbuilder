@@ -91,6 +91,8 @@ var (
 	slowCol        = color.RGBA{240, 200, 90, 255}
 	rangeRingCol   = color.RGBA{180, 130, 220, 110}
 	rangeTargetCol = color.RGBA{255, 200, 130, 220}
+	coneCol        = color.RGBA{120, 220, 255, 18}
+	coneEdgeCol    = color.RGBA{120, 220, 255, 60}
 
 	logBg          = color.RGBA{16, 18, 26, 220}
 	logEdge        = color.RGBA{70, 80, 110, 255}
@@ -229,6 +231,9 @@ func nearestInRangeForPreview(c *combat.Combat, r float64) *combatEnemyView {
 		if d > r {
 			continue
 		}
+		if !inConePreview(c, e.X, e.Y) {
+			continue
+		}
 		blocked := false
 		for _, w := range c.Walls {
 			if w.HP <= 0 {
@@ -253,6 +258,27 @@ func nearestInRangeForPreview(c *combat.Combat, r float64) *combatEnemyView {
 		return nil
 	}
 	return &combatEnemyView{X: bestX, Y: bestY}
+}
+
+// inConePreview mirrors combat.Combat.inCone for the UI's hover preview.
+func inConePreview(c *combat.Combat, tx, ty float64) bool {
+	dx := tx - c.Player.X
+	dy := ty - c.Player.Y
+	if dx == 0 && dy == 0 {
+		return true
+	}
+	angle := math.Atan2(dy, dx)
+	delta := angle - c.Player.Facing
+	for delta > math.Pi {
+		delta -= 2 * math.Pi
+	}
+	for delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= combat.ConeHalfAngle
 }
 
 type combatEnemyView struct {
@@ -376,9 +402,13 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 	for _, r := range []float32{RadarRadius * 0.33, RadarRadius * 0.66, RadarRadius} {
 		vector.StrokeCircle(screen, RadarCX, RadarCY, r, 1, radarRing, true)
 	}
+	drawCone(screen, c)
 	drawMovePreview(screen, c)
-	// player dot
+	// player dot + facing tick
 	vector.DrawFilledCircle(screen, RadarCX, RadarCY, 8, playerColor, true)
+	tx := float32(RadarCX) + float32(math.Cos(c.Player.Facing)*16)
+	ty := float32(RadarCY) + float32(math.Sin(c.Player.Facing)*16)
+	vector.StrokeLine(screen, RadarCX, RadarCY, tx, ty, 3, playerColor, true)
 
 	for _, w := range c.Walls {
 		if w.HP <= 0 {
@@ -419,6 +449,21 @@ func drawRadar(screen *ebiten.Image, c *combat.Combat) {
 		label := fmt.Sprintf("M %d/%d  (%d/t)", m.HP, m.MaxHP, m.AttackPower)
 		drawText(screen, label, int(mx)-32, int(my)+10, faceSmall, minionCol)
 	}
+}
+
+// drawCone renders only the two boundary rays of the player's targeting cone.
+// No fill — keeps the radar readable. Facing tick on the player dot conveys
+// the direction; these rays just mark where the cone ends.
+func drawCone(screen *ebiten.Image, c *combat.Combat) {
+	const radius = float64(RadarRadius)
+	half := combat.ConeHalfAngle
+	facing := c.Player.Facing
+	ax := float32(RadarCX) + float32(math.Cos(facing-half)*radius)
+	ay := float32(RadarCY) + float32(math.Sin(facing-half)*radius)
+	bx := float32(RadarCX) + float32(math.Cos(facing+half)*radius)
+	by := float32(RadarCY) + float32(math.Sin(facing+half)*radius)
+	vector.StrokeLine(screen, RadarCX, RadarCY, ax, ay, 1, coneEdgeCol, true)
+	vector.StrokeLine(screen, RadarCX, RadarCY, bx, by, 1, coneEdgeCol, true)
 }
 
 func drawMovePreview(screen *ebiten.Image, c *combat.Combat) {

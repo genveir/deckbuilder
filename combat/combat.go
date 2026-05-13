@@ -55,11 +55,17 @@ type Wall struct {
 	HP, MaxHP int
 }
 
-// Player tracks the player's position in world coordinates. The radar is
-// rendered relative to this position.
+// Player tracks the player's position in world coordinates and a facing
+// angle (radians, standard math: 0 = +X axis, increasing counter-clockwise).
+// Targeting helpers filter to enemies within ConeHalfAngle of the facing.
 type Player struct {
-	X, Y float64
+	X, Y   float64
+	Facing float64
 }
+
+// ConeHalfAngle is the half-angle of the player's targeting cone in radians.
+// Total cone width = 2 × ConeHalfAngle.
+const ConeHalfAngle = math.Pi / 3 // 60° each side, 120° total
 
 // StagedCard is a rune queued for a single composed spell, paired with its
 // placement target if the rune required one.
@@ -148,8 +154,51 @@ func New(seed int64, hp, maxHP int, deck []runes.Card, foes []*enemies.Enemy) *C
 		rng:            rand.New(rand.NewSource(seed)),
 	}
 	c.shuffle(c.Draw)
+	c.faceNearestEnemy()
 	c.startPlayerTurn()
 	return c
+}
+
+// faceNearestEnemy aims the player at the closest living enemy. Called once
+// at combat start so every encounter opens with at least one enemy in the cone.
+func (c *Combat) faceNearestEnemy() {
+	var nearest *enemies.Enemy
+	best := math.Inf(1)
+	for _, e := range c.Enemies {
+		if e.HP <= 0 {
+			continue
+		}
+		d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
+		if d < best {
+			best = d
+			nearest = e
+		}
+	}
+	if nearest != nil {
+		c.Player.Facing = math.Atan2(nearest.Y-c.Player.Y, nearest.X-c.Player.X)
+	}
+}
+
+// inCone reports whether (tx, ty) lies within the player's targeting cone.
+func (c *Combat) inCone(tx, ty float64) bool {
+	dx := tx - c.Player.X
+	dy := ty - c.Player.Y
+	if dx == 0 && dy == 0 {
+		return true
+	}
+	angle := math.Atan2(dy, dx)
+	delta := angle - c.Player.Facing
+	// wrap to [-pi, pi]
+	for delta > math.Pi {
+		delta -= 2 * math.Pi
+	}
+	for delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= ConeHalfAngle
 }
 
 func (c *Combat) addLog(kind LogKind, format string, args ...interface{}) {
@@ -435,13 +484,19 @@ var mods0 = make([]string, 0, 4)
 
 // MoveTowards moves the player along the given offset (radar-relative delta),
 // consuming movement budget. Walls block movement: the player stops just
-// before a wall they would otherwise cross. Returns the distance moved.
+// before a wall they would otherwise cross. Facing always rotates to the
+// chosen direction, even when movement is blocked or budget is 0. Returns the
+// distance actually moved.
 func (c *Combat) MoveTowards(dx, dy float64) float64 {
-	if c.Phase != PhasePlayer || c.MovementBudget <= 0 {
+	if c.Phase != PhasePlayer {
 		return 0
 	}
 	dist := math.Hypot(dx, dy)
 	if dist == 0 {
+		return 0
+	}
+	c.Player.Facing = math.Atan2(dy, dx)
+	if c.MovementBudget <= 0 {
 		return 0
 	}
 	step := math.Min(dist, c.MovementBudget)
@@ -886,8 +941,8 @@ func (c *Combat) checkVictory() {
 // --- runes.World implementation ---
 
 // nearestEnemyInRange returns the nearest living enemy that is within
-// maxRange of the player and has line-of-sight. maxRange of 0 means
-// unlimited.
+// maxRange of the player, in the player's targeting cone, and has
+// line-of-sight. maxRange of 0 means unlimited.
 func (c *Combat) nearestEnemyInRange(maxRange float64) *enemies.Enemy {
 	var target *enemies.Enemy
 	best := math.Inf(1)
@@ -897,6 +952,9 @@ func (c *Combat) nearestEnemyInRange(maxRange float64) *enemies.Enemy {
 		}
 		d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
 		if maxRange > 0 && d > maxRange {
+			continue
+		}
+		if !c.inCone(e.X, e.Y) {
 			continue
 		}
 		if !c.hasLOS(c.Player.X, c.Player.Y, e.X, e.Y) {
@@ -1026,11 +1084,16 @@ func (c *Combat) ConsumeAllMovement() {
 	c.MovementBudget = 0
 }
 
-// NearestIntendsAttack returns true if the nearest living, non-stunned enemy
-// will deal damage to the player on its next turn (not to a minion).
-func (c *Combat) NearestIntendsAttack() bool {
-	target := c.nearestNonStunned()
+// NearestIntendsAttack returns true if the cone-nearest living enemy within
+// maxRange (0 = unlimited) will deal damage to the player on its next turn.
+// Targets the same enemy DamageNearest would pick, so Isa-family rules align
+// with the rune's actual hit.
+func (c *Combat) NearestIntendsAttack(maxRange float64) bool {
+	target := c.nearestEnemyInRange(maxRange)
 	if target == nil {
+		return false
+	}
+	if target.Stunned > 0 {
 		return false
 	}
 	t := c.chooseTarget(target)
@@ -1282,6 +1345,9 @@ func (c *Combat) nearestNonStunnedInRange(maxRange float64) *enemies.Enemy {
 		}
 		d := math.Hypot(e.X-c.Player.X, e.Y-c.Player.Y)
 		if maxRange > 0 && d > maxRange {
+			continue
+		}
+		if !c.inCone(e.X, e.Y) {
 			continue
 		}
 		if !c.hasLOS(c.Player.X, c.Player.Y, e.X, e.Y) {

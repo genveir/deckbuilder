@@ -71,7 +71,7 @@ type World interface {
 	GrantMovement(extra float64)
 	HasMoved() bool
 	ConsumeAllMovement()
-	NearestIntendsAttack() bool
+	NearestIntendsAttack(maxRange float64) bool
 
 	SummonMinion(power, hp int)
 	SummonMinionAt(power, hp int, x, y float64)
@@ -192,9 +192,9 @@ func Move() Card {
 		Name:        "Move",
 		Glyph:       "ᚱ",
 		Cost:        0,
-		Description: "Gain 80 extra movement this turn.",
+		Description: "Gain 100 extra movement this turn.",
 		Effect: func(w World) {
-			w.GrantMovement(80)
+			w.GrantMovement(100)
 		},
 	}
 }
@@ -229,7 +229,7 @@ func Isa() Card {
 		Family:      "Isa",
 		Description: "Deal 8 damage to the nearest enemy intending to attack. Fizzles otherwise. Inverse flips the condition.",
 		Effect: func(w World) {
-			intends := w.NearestIntendsAttack()
+			intends := w.NearestIntendsAttack(r)
 			expects := !w.HasModifier("Inverse")
 			if intends != expects {
 				if expects {
@@ -416,7 +416,7 @@ func SharpIsa() Card {
 		Family:      "Isa",
 		Description: "Deal 13 damage to the nearest enemy intending to attack. Fizzles otherwise. Inverse flips the condition.",
 		Effect: func(w World) {
-			intends := w.NearestIntendsAttack()
+			intends := w.NearestIntendsAttack(r)
 			expects := !w.HasModifier("Inverse")
 			if intends != expects {
 				if expects {
