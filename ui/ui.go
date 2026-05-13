@@ -490,13 +490,17 @@ func cardRect(i int) (int, int) {
 }
 
 // cardPlayable evaluates whether a hand card can be staged right now,
-// accounting for spell-already-cast, energy, and CanPlay constraints.
+// accounting for spell-already-cast, energy, composition, and CanPlay
+// constraints.
 func cardPlayable(c *combat.Combat, card runes.Card) (bool, string) {
 	if c.SpellCast {
 		return false, "spell already cast this turn"
 	}
 	if card.Cost > c.Energy {
 		return false, "not enough energy"
+	}
+	if ok, why := c.CanAddToStage(card); !ok {
+		return false, why
 	}
 	if card.CanPlay != nil {
 		if ok, why := card.CanPlay(c); !ok {

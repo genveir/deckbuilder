@@ -45,6 +45,14 @@ func (c Class) String() string {
 // Effect applies a card's effect to the combat world. The combat package
 // implements World; runes only depend on this small interface to avoid an
 // import cycle.
+// CardRole is the role of a rune in a composed spell.
+type CardRole int
+
+const (
+	RoleCore     CardRole = iota // a spell on its own
+	RoleModifier                 // attaches to a Core of matching Family
+)
+
 type World interface {
 	// Damage / debuff: maxRange of 0 means unlimited; LOS is always required.
 	DamageNearest(amount int, dt DamageType, maxRange float64)
@@ -73,6 +81,10 @@ type World interface {
 	LoseHP(amount int)
 	AddEnergy(amount int)
 	PlaceWall(cx, cy float64, length float64, hp int)
+
+	// Composition / log surface for runes.
+	HasModifier(name string) bool
+	LogNote(text string)
 }
 
 // requireTargetInRange is a CanPlay helper for cards that target the nearest
@@ -118,6 +130,16 @@ type Card struct {
 	// CanPlay returns whether the card may be played right now and, if not,
 	// a short reason for the UI. nil means always playable (subject to energy).
 	CanPlay func(World) (bool, string)
+
+	// --- Composition (spell grammar) ---
+
+	// Role: Core (a spell on its own) or Modifier (attaches to a Core).
+	Role CardRole
+	// Family groups runes that accept the same modifiers. Two Cores in a spell
+	// is forbidden regardless of Family; Family is used by modifier matching.
+	Family string
+	// ModifiesFamily: for Modifier-role cards, the Family of Core they attach to.
+	ModifiesFamily string
 }
 
 func FireAttack() Card {
@@ -193,47 +215,49 @@ func AphyrDelay() Card {
 	}
 }
 
-func IsaAggressive() Card {
+// Isa deals damage when the nearest enemy's intent matches the spell's
+// expectation. By default the spell expects the enemy to be attacking; the
+// Inverse modifier flips that to non-attacking. On mismatch the rune fizzles.
+func Isa() Card {
 	const r = 200
 	return Card{
-		Name:        "Isa (aggressive)",
-		Glyph:       "ᛁ↯",
+		Name:        "Isa",
+		Glyph:       "ᛁ",
 		Cost:        1,
 		Range:       r,
-		Description: "Deal 8 damage. Castable only if the nearest enemy intends to attack.",
-		Effect:      func(w World) { w.DamageNearest(8, Physical, r) },
-		CanPlay: func(w World) (bool, string) {
-			if !w.HasTargetInRange(r) {
-				return false, "no target in range"
+		Role:        RoleCore,
+		Family:      "Isa",
+		Description: "Deal 8 damage to the nearest enemy intending to attack. Fizzles otherwise. Inverse flips the condition.",
+		Effect: func(w World) {
+			intends := w.NearestIntendsAttack()
+			expects := !w.HasModifier("Inverse")
+			if intends != expects {
+				if expects {
+					w.LogNote("Isa fizzles: target is not intending to attack")
+				} else {
+					w.LogNote("Isa fizzles: target is intending to attack")
+				}
+				return
 			}
-			if !w.NearestIntendsAttack() {
-				return false, "nearest must intend to attack"
-			}
-			return true, ""
+			w.DamageNearest(8, Physical, r)
 		},
+		CanPlay: requireTargetInRange(r),
 	}
 }
 
-func IsaPassive() Card {
-	const r = 200
+// Inverse is a modifier rune that attaches to a Core of the "Isa" family,
+// flipping its attacker / non-attacker condition. Useless on its own.
+func Inverse() Card {
 	return Card{
-		Name:        "Isa (passive)",
-		Glyph:       "ᛁ◦",
-		Cost:        1,
-		Range:       r,
-		Description: "Deal 8 damage. Castable only if the nearest enemy does NOT intend to attack.",
-		Effect:      func(w World) { w.DamageNearest(8, Physical, r) },
-		CanPlay: func(w World) (bool, string) {
-			if !w.HasTargetInRange(r) {
-				return false, "no target in range"
-			}
-			if w.NearestIntendsAttack() {
-				return false, "nearest must not intend to attack"
-			}
-			return true, ""
-		},
+		Name:           "Inverse",
+		Glyph:          "¬",
+		Cost:           1,
+		Role:           RoleModifier,
+		ModifiesFamily: "Isa",
+		Description:    "Modifier (Isa): flips the target condition. Useless on its own.",
 	}
 }
+
 
 // --- Necromancer cards ---
 
@@ -379,45 +403,32 @@ func MassDelay() Card {
 	}
 }
 
+// SharpIsa is the strong Isa variant. Same intent fizzle, same Inverse
+// modifier compatibility — just bigger damage.
 func SharpIsa() Card {
 	const r = 200
 	return Card{
 		Name:        "Sharp Isa",
-		Glyph:       "ᛁ↯+",
+		Glyph:       "ᛁ+",
 		Cost:        1,
 		Range:       r,
-		Description: "Deal 13 damage. Castable only if the nearest enemy intends to attack.",
-		Effect:      func(w World) { w.DamageNearest(13, Physical, r) },
-		CanPlay: func(w World) (bool, string) {
-			if !w.HasTargetInRange(r) {
-				return false, "no target in range"
+		Role:        RoleCore,
+		Family:      "Isa",
+		Description: "Deal 13 damage to the nearest enemy intending to attack. Fizzles otherwise. Inverse flips the condition.",
+		Effect: func(w World) {
+			intends := w.NearestIntendsAttack()
+			expects := !w.HasModifier("Inverse")
+			if intends != expects {
+				if expects {
+					w.LogNote("Sharp Isa fizzles: target is not intending to attack")
+				} else {
+					w.LogNote("Sharp Isa fizzles: target is intending to attack")
+				}
+				return
 			}
-			if !w.NearestIntendsAttack() {
-				return false, "nearest must intend to attack"
-			}
-			return true, ""
+			w.DamageNearest(13, Physical, r)
 		},
-	}
-}
-
-func ColdIsa() Card {
-	const r = 200
-	return Card{
-		Name:        "Cold Isa",
-		Glyph:       "ᛁ◦+",
-		Cost:        1,
-		Range:       r,
-		Description: "Deal 13 damage. Castable only if the nearest enemy does NOT intend to attack.",
-		Effect:      func(w World) { w.DamageNearest(13, Physical, r) },
-		CanPlay: func(w World) (bool, string) {
-			if !w.HasTargetInRange(r) {
-				return false, "no target in range"
-			}
-			if w.NearestIntendsAttack() {
-				return false, "nearest must not intend to attack"
-			}
-			return true, ""
-		},
+		CanPlay: requireTargetInRange(r),
 	}
 }
 
@@ -508,9 +519,9 @@ func RewardPool(c Class) []Card {
 		return []Card{
 			AphyrDelay(),
 			SharpIsa(),
-			ColdIsa(),
 			Sprint(),
 			Mimic(),
+			Inverse(),
 		}
 	case ClassNecromancer:
 		return []Card{
@@ -560,11 +571,11 @@ func necromancerStarter() []Card {
 
 func mesmerStarter() []Card {
 	deck := make([]Card, 0, 10)
-	for i := 0; i < 4; i++ {
-		deck = append(deck, IsaAggressive())
+	for i := 0; i < 6; i++ {
+		deck = append(deck, Isa())
 	}
-	for i := 0; i < 4; i++ {
-		deck = append(deck, IsaPassive())
+	for i := 0; i < 2; i++ {
+		deck = append(deck, Inverse())
 	}
 	for i := 0; i < 2; i++ {
 		deck = append(deck, Move())

@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	StartingEnergy   = 3
+	EnergyAtTurn1    = 1
+	EnergyCap        = 5
 	HandSize         = 5
 	BaseMovement     = 30
 	DefaultMaxHP     = 70
@@ -106,6 +107,10 @@ type Combat struct {
 	// enemy phase. Set when the player casts a spell containing any Slow rune.
 	pendingSlowSpell []StagedCard
 
+	// activeModifiers is the set of modifier rune names attached to the Core
+	// currently being resolved. Set by resolveSpell around the Core's Effect.
+	activeModifiers []string
+
 	MovementBudget float64 // remaining movement this turn
 	hasMoved       bool
 	Phase          Phase
@@ -172,9 +177,13 @@ func (c *Combat) startPlayerTurn() {
 	}
 	c.Turn++
 	c.addLog(LogSystem, "— Turn %d —", c.Turn)
-	c.Energy = StartingEnergy
-	c.MaxEnergy = StartingEnergy
-	c.PlayerArmor = 0
+	max := EnergyAtTurn1 + c.Turn - 1
+	if max > EnergyCap {
+		max = EnergyCap
+	}
+	c.MaxEnergy = max
+	c.Energy = max
+	// PlayerArmor persists across turns; only consumed by incoming damage.
 	c.MovementBudget = BaseMovement
 	c.hasMoved = false
 	c.Stage = c.Stage[:0]
@@ -263,6 +272,9 @@ func (c *Combat) StageCard(i int) (staged, needsPlacement bool) {
 	if card.Cost > c.Energy {
 		return false, false
 	}
+	if ok, _ := c.CanAddToStage(card); !ok {
+		return false, false
+	}
 	if card.CanPlay != nil {
 		if ok, _ := card.CanPlay(c); !ok {
 			return false, false
@@ -276,6 +288,40 @@ func (c *Combat) StageCard(i int) (staged, needsPlacement bool) {
 	c.Stage = append(c.Stage, StagedCard{Card: card})
 	c.Hand = append(c.Hand[:i], c.Hand[i+1:]...)
 	return true, false
+}
+
+// CanAddToStage enforces the spell-composition grammar:
+//   - at most one Core per spell;
+//   - a Modifier requires a staged Core of matching Family;
+//   - the same Modifier (by name) can only be staged once per spell.
+//
+// Returns (true, "") if the card may be added, otherwise (false, reason).
+func (c *Combat) CanAddToStage(card runes.Card) (bool, string) {
+	if card.Role == runes.RoleModifier {
+		hasMatch := false
+		for _, sc := range c.Stage {
+			if sc.Card.Role == runes.RoleCore && sc.Card.Family == card.ModifiesFamily {
+				hasMatch = true
+				break
+			}
+		}
+		if !hasMatch {
+			return false, "no compatible core rune in spell"
+		}
+		for _, sc := range c.Stage {
+			if sc.Card.Role == runes.RoleModifier && sc.Card.Name == card.Name {
+				return false, "modifier already attached"
+			}
+		}
+		return true, ""
+	}
+	// Core
+	for _, sc := range c.Stage {
+		if sc.Card.Role == runes.RoleCore {
+			return false, "spell already has a core rune"
+		}
+	}
+	return true, ""
 }
 
 // ConfirmPlacement stages the pending card with the chosen world target.
@@ -353,21 +399,39 @@ func (c *Combat) CastSpell() bool {
 	return true
 }
 
-// resolveSpell runs the effects of every staged rune in order and discards
-// the cards. Caller is responsible for clearing the source slice.
+// resolveSpell processes a composed spell: extracts the Core and Modifier
+// names, sets activeModifiers for the duration of the Core's effect, and
+// discards every rune to the player's discard pile.
 func (c *Combat) resolveSpell(stage []StagedCard) {
-	for _, sc := range stage {
-		switch {
-		case sc.Card.Effect != nil:
-			sc.Card.Effect(c)
-		case sc.Card.PlacementEffect != nil:
-			sc.Card.PlacementEffect(c, sc.PlaceX, sc.PlaceY)
+	var core *StagedCard
+	mods := mods0[:0]
+	for i := range stage {
+		sc := &stage[i]
+		if sc.Card.Role == runes.RoleModifier {
+			mods = append(mods, sc.Card.Name)
+			continue
 		}
+		if core == nil {
+			core = sc
+		}
+	}
+	if core != nil {
+		c.activeModifiers = mods
+		switch {
+		case core.Card.Effect != nil:
+			core.Card.Effect(c)
+		case core.Card.PlacementEffect != nil:
+			core.Card.PlacementEffect(c, core.PlaceX, core.PlaceY)
+		}
+		c.activeModifiers = nil
 	}
 	for _, sc := range stage {
 		c.Discard = append(c.Discard, sc.Card)
 	}
 }
+
+// reusable scratch slice for modifier names during resolution
+var mods0 = make([]string, 0, 4)
 
 // MoveTowards moves the player along the given offset (radar-relative delta),
 // consuming movement budget. Walls block movement: the player stops just
@@ -1092,6 +1156,22 @@ func (c *Combat) LoseHP(amount int) {
 func (c *Combat) AddEnergy(amount int) {
 	c.Energy += amount
 	c.addLog(LogPlayer, "+%d energy (now %d)", amount, c.Energy)
+}
+
+// HasModifier reports whether a modifier of the given name is attached to the
+// Core currently being resolved. Only meaningful from within a Core's Effect.
+func (c *Combat) HasModifier(name string) bool {
+	for _, m := range c.activeModifiers {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
+// LogNote lets a rune Effect add a free-form line to the combat log.
+func (c *Combat) LogNote(text string) {
+	c.addLog(LogPlayer, "%s", text)
 }
 
 // PlaceWall creates a wall segment of the given length and HP, centered at
